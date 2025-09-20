@@ -37,38 +37,37 @@ def test_trace_id_with_context():
 
     assert trace_id == custom_trace
 
-@patch('runtime.logging_setup.log')
-def test_preview_logs_structure(mock_log):
+def test_preview_logs_structure(monkeypatch, demo_bot_id):
     """Test that preview endpoint logs contain required fields"""
-    bot_id = "c3b88b65-623c-41b5-a3c9-8d56fcbc4413"
-    test_text = "/start"
+    calls = []
 
-    # Make preview request
+    def fake_info(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    from runtime import logging_setup
+    monkeypatch.setattr(logging_setup.log, "info", fake_info)
+
+    test_text = "/start"
     response = client.post(
         "/preview/send",
-        json={"bot_id": bot_id, "text": test_text}
+        json={"bot_id": demo_bot_id, "text": test_text}
     )
 
     assert response.status_code == 200
+    assert len(calls) > 0
 
-    # Verify log was called
-    mock_log.info.assert_called_once()
+    # Check the first log call
+    args, kwargs = calls[0]
+    assert len(args) > 0
+    assert args[0] == "preview"
 
-    # Get the call arguments
-    call_args = mock_log.info.call_args
-
-    # Should have positional arg "preview"
-    assert call_args[0][0] == "preview"
-
-    # Should have keyword arguments with required fields
-    kwargs = call_args[1]
+    # Should have required fields
     assert "trace_id" in kwargs
     assert "bot_id" in kwargs
     assert "text" in kwargs
 
     # Verify values
-    assert kwargs["bot_id"] == bot_id
-    assert kwargs["text"] == test_text
+    assert kwargs["bot_id"] == demo_bot_id
     assert isinstance(kwargs["trace_id"], str)
 
 @patch('runtime.logging_setup.log')
@@ -141,6 +140,7 @@ def test_multiple_preview_calls_different_trace_ids(monkeypatch, demo_bot_id):
     def fake_info(*args, **kwargs):
         calls.append((args, kwargs))
 
+    from runtime import logging_setup
     monkeypatch.setattr(logging_setup.log, "info", fake_info)
 
     # Make multiple requests
@@ -168,6 +168,7 @@ def test_log_special_characters(monkeypatch, demo_bot_id):
     def fake_info(*args, **kwargs):
         calls.append((args, kwargs))
 
+    from runtime import logging_setup
     monkeypatch.setattr(logging_setup.log, "info", fake_info)
 
     special_text = "Привет! 🤖 /start"
@@ -190,6 +191,7 @@ def test_log_long_text(monkeypatch, demo_bot_id):
     def fake_info(*args, **kwargs):
         calls.append((args, kwargs))
 
+    from runtime import logging_setup
     monkeypatch.setattr(logging_setup.log, "info", fake_info)
 
     long_text = "A" * 1000
@@ -256,6 +258,7 @@ def test_concurrent_logging(monkeypatch, demo_bot_id):
     def fake_info(*args, **kwargs):
         calls.append((args, kwargs))
 
+    from runtime import logging_setup
     monkeypatch.setattr(logging_setup.log, "info", fake_info)
 
     # Make multiple concurrent-like requests

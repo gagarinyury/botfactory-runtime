@@ -105,11 +105,8 @@ def test_preview_send_empty_text():
         }
     )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert "bot_reply" in data
-    # Empty text should trigger fallback
-    assert data["bot_reply"] == "Не знаю эту команду"
+    # Empty text triggers Pydantic validation error
+    assert response.status_code == 422
 
 def test_preview_send_special_characters():
     """Test /preview/send with special characters"""

@@ -123,15 +123,16 @@ def test_rebuild_on_reload(client, demo_bot_id, monkeypatch):
     import types
     from runtime import dsl_engine
 
-    # Counter for build_router calls
+    # Counter for build_router_from_spec calls
     call_count = {"n": 0}
-    original_build_router = dsl_engine.build_router
+    from runtime.main import dsl_engine as main_dsl_engine
+    original_build_router = main_dsl_engine.build_router_from_spec
 
     def counting_build_router(spec):
         call_count["n"] += 1
         return original_build_router(spec)
 
-    monkeypatch.setattr(dsl_engine, "build_router", counting_build_router)
+    monkeypatch.setattr(main_dsl_engine, "build_router_from_spec", counting_build_router)
 
     # First call - should build router
     response1 = client.get(f"/bots/{demo_bot_id}")

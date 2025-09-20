@@ -199,7 +199,7 @@ def _get_metric(text, name):
 
 def test_error_counters_increment(monkeypatch, demo_bot_id):
     """Test that error counters increment when errors occur"""
-    from runtime import loader
+    from runtime.main import loader
 
     # Mock loader to raise exception
     def fake_load_spec(*args, **kwargs):

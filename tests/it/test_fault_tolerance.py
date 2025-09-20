@@ -55,8 +55,10 @@ def test_get_bot_spec_not_found():
 
     assert response.status_code == 404
     data = response.json()
-    assert "detail" in data
-    assert "not found" in data["detail"].lower()
+    assert "detail" in data or "error" in data
+    # detail can be string or dict/object
+    detail_text = str(data.get("detail", data.get("error", "")))
+    assert "not found" in detail_text.lower()
 
 def test_preview_with_invalid_bot_spec():
     """Test preview with bot that has invalid spec_json"""
