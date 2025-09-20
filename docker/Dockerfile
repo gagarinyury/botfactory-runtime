@@ -4,7 +4,8 @@ RUN pip install -U pip
 COPY pyproject.toml /app/
 WORKDIR /app
 RUN pip install .
-RUN pip install "git+https://github.com/gagarinyury/aiogram_bot_template@v1.2.0"
+RUN pip install "aiogram==3.22.0" "aiohttp==3.12.15" "redis==6.4.0" "pydantic==2.11.9" "prometheus-client" "structlog"
+RUN pip install --no-deps "git+https://github.com/gagarinyury/aiogram_bot_template@v1.2.0"
 COPY runtime /app/runtime
 COPY migrations /app/migrations
 COPY tests /app/tests

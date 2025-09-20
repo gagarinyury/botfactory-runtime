@@ -133,11 +133,16 @@ def build_router(spec) -> Router:
     """Build aiogram Router from spec_json"""
     r = Router()
     from aiogram.types import Message
+    from aiogram.filters import Command
+
+    def add_cmd(cmd: str, reply: str):
+        cmd_name = cmd.lstrip('/')
+        @r.message(Command(commands=[cmd_name]))
+        async def _(m: Message, _reply=reply):
+            await m.answer(_reply)
 
     for it in spec.get("intents", []):
         if "cmd" in it:
-            @r.message(lambda m, cmd=it["cmd"]: m.text == cmd)
-            async def _(m: Message, reply=it["reply"]):
-                await m.answer(reply)
+            add_cmd(it["cmd"], it.get("reply", ""))
 
     return r

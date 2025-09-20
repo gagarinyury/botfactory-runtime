@@ -6,6 +6,7 @@ from .registry import BotRegistry
 from .loader import BotLoader
 from .dsl_engine import DSLEngine
 from prometheus_client import generate_latest
+from .logging_setup import log  # импорт даёт конфиг
 
 app = FastAPI()
 registry = BotRegistry()
@@ -81,7 +82,7 @@ async def preview_send(p: dict):
     bot_id, text = p["bot_id"], p["text"]
     from .dsl_engine import handle
     from .telemetry import measure
-    from .logging import log, with_trace
+    from .logging import with_trace
     tid = with_trace()
     log.info("preview", trace_id=tid, bot_id=bot_id, text=text)
     return {"bot_reply": await measure(bot_id, handle, bot_id, text)}
