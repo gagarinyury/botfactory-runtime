@@ -136,9 +136,10 @@ async def test_get_router_caching_behavior():
         mock_session.return_value.__aenter__.return_value = mock_session_instance
 
         mock_bot_config = {
-            "spec_json": {"intents": [{"cmd": "/test", "reply": "Test"}]}
+            "spec_json": {"intents": [{"cmd": "/test", "reply": "Test"}]},
+            "version": 1
         }
-        mock_loader.load_spec_by_bot_id.return_value = mock_bot_config
+        mock_loader.load_spec_by_bot_id = AsyncMock(return_value=mock_bot_config)
 
         # First call should load from database
         router1 = await get_router(test_bot_id)

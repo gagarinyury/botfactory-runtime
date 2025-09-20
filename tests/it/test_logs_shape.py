@@ -13,10 +13,10 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def mock_logging(monkeypatch):
     """Mock logging functions to avoid output during tests"""
-    monkeypatch.setattr("runtime.main.log.info", lambda *a, **k: None)
-    monkeypatch.setattr("runtime.main.log.error", lambda *a, **k: None)
-    monkeypatch.setattr("runtime.main.log.warning", lambda *a, **k: None)
-    monkeypatch.setattr("runtime.main.log.debug", lambda *a, **k: None)
+    monkeypatch.setattr("runtime.logging_setup.log.info", lambda *a, **k: None)
+    monkeypatch.setattr("runtime.logging_setup.log.error", lambda *a, **k: None)
+    monkeypatch.setattr("runtime.logging_setup.log.warning", lambda *a, **k: None)
+    monkeypatch.setattr("runtime.logging_setup.log.debug", lambda *a, **k: None)
 
 def test_trace_id_generation():
     """Test that trace_id is generated correctly"""
@@ -37,7 +37,7 @@ def test_trace_id_with_context():
 
     assert trace_id == custom_trace
 
-@patch('runtime.main.log')
+@patch('runtime.logging_setup.log')
 def test_preview_logs_structure(mock_log):
     """Test that preview endpoint logs contain required fields"""
     bot_id = "c3b88b65-623c-41b5-a3c9-8d56fcbc4413"
@@ -71,7 +71,7 @@ def test_preview_logs_structure(mock_log):
     assert kwargs["text"] == test_text
     assert isinstance(kwargs["trace_id"], str)
 
-@patch('runtime.main.log')
+@patch('runtime.logging_setup.log')
 def test_logs_no_token_exposure(mock_log):
     """Test that tokens are not logged"""
     bot_id = "c3b88b65-623c-41b5-a3c9-8d56fcbc4413"
@@ -136,7 +136,7 @@ def test_log_format_fields():
 
 def test_multiple_preview_calls_different_trace_ids():
     """Test that multiple calls generate different trace IDs"""
-    with patch('runtime.main.log') as mock_log:
+    with patch('runtime.logging_setup.log') as mock_log:
         bot_id = "c3b88b65-623c-41b5-a3c9-8d56fcbc4413"
 
         # Make multiple requests
@@ -158,7 +158,7 @@ def test_multiple_preview_calls_different_trace_ids():
         assert len(trace_ids) == 3
         assert len(set(trace_ids)) == 3  # All unique
 
-@patch('runtime.main.log')
+@patch('runtime.logging_setup.log')
 def test_log_special_characters(mock_log):
     """Test logging with special characters"""
     bot_id = "c3b88b65-623c-41b5-a3c9-8d56fcbc4413"
@@ -176,7 +176,7 @@ def test_log_special_characters(mock_log):
     kwargs = mock_log.info.call_args[1]
     assert kwargs["text"] == special_text
 
-@patch('runtime.main.log')
+@patch('runtime.logging_setup.log')
 def test_log_long_text(mock_log):
     """Test logging with very long text"""
     bot_id = "c3b88b65-623c-41b5-a3c9-8d56fcbc4413"
@@ -237,7 +237,7 @@ def test_log_level_configuration():
         # The filtering bound logger should be configured for INFO level
         assert callable(wrapper_class)
 
-@patch('runtime.main.log')
+@patch('runtime.logging_setup.log')
 def test_concurrent_logging(mock_log):
     """Test logging under concurrent requests"""
     bot_id = "c3b88b65-623c-41b5-a3c9-8d56fcbc4413"

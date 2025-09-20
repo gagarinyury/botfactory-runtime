@@ -9,21 +9,21 @@ client = TestClient(app)
 def test_health_db_when_database_down():
     """Test /health/db endpoint when database is unavailable"""
     with patch('runtime.main.registry') as mock_registry:
-        # Mock database failure
-        mock_registry.db_ok.return_value = False
+        # Mock database failure - db_ok is async function
+        mock_registry.db_ok = AsyncMock(return_value=False)
 
         response = client.get("/health/db")
 
-        assert response.status_code == 200
+        assert response.status_code == 503  # Should return 503 for DB down
         data = response.json()
         assert "db_ok" in data
         assert data["db_ok"] is False
 
-@patch('runtime.main.async_session')
-def test_preview_with_database_error(mock_session):
+@patch('runtime.telemetry.measured_preview')
+def test_preview_with_database_error(mock_measured_preview):
     """Test preview endpoint handles database errors gracefully"""
-    # Mock database session that raises exception
-    mock_session.return_value.__aenter__.side_effect = Exception("Database connection failed")
+    # Mock telemetry to raise database error
+    mock_measured_preview.side_effect = Exception("Database connection failed")
 
     bot_id = "c3b88b65-623c-41b5-a3c9-8d56fcbc4413"
 
@@ -32,23 +32,25 @@ def test_preview_with_database_error(mock_session):
         json={"bot_id": bot_id, "text": "/start"}
     )
 
-    # Should handle error gracefully - implementation dependent
-    # Current implementation might still work with fallback behavior
-    # This test verifies no 500 error crashes the service
-    assert response.status_code in [200, 500, 503]
+    # Should return 503 for DB unavailable
+    assert response.status_code == 503
+    data = response.json()
+    assert data["error"]["code"] == "db_unavailable"
 
 @patch('runtime.main.loader')
 def test_get_bot_spec_database_error(mock_loader):
     """Test /bots/{bot_id} endpoint with database error"""
-    # Mock loader that raises exception
-    mock_loader.load_spec_by_bot_id.side_effect = Exception("Database error")
+    # Mock loader async function that raises exception
+    mock_loader.load_spec_by_bot_id = AsyncMock(side_effect=Exception("Database error"))
 
     bot_id = "c3b88b65-623c-41b5-a3c9-8d56fcbc4413"
 
     response = client.get(f"/bots/{bot_id}")
 
-    # Should return appropriate error status
-    assert response.status_code in [404, 500, 503]
+    # Should return 503 for database unavailable
+    assert response.status_code == 503
+    data = response.json()
+    assert data["error"]["code"] == "db_unavailable"
 
 def test_get_bot_spec_not_found():
     """Test /bots/{bot_id} endpoint with non-existent bot"""
@@ -92,8 +94,10 @@ def test_build_router_error_handling(mock_dsl_engine):
 
     response = client.get(f"/bots/{bot_id}")
 
-    # Should handle error appropriately
-    assert response.status_code in [200, 500]
+    # Should return 500 for internal error
+    assert response.status_code == 500
+    data = response.json()
+    assert data["error"]["code"] == "internal"
 
 def test_metrics_endpoint_always_available():
     """Test that metrics endpoint is always available even under stress"""
