@@ -142,9 +142,41 @@ async def tg_webhook(bot_id: str, update: dict):
 
     async def process_update(bot_id: str, update: dict):
         """Process Telegram update"""
-        router = await get_router(bot_id)   # пересобери при reload
-        # передай update в aiogram Dispatcher, связанный с router (минимальная обвязка)
-        return {"ok": True}
+        from aiogram import Bot, Dispatcher
+        from aiogram.types import Update
+        from .dsl_engine import build_router
+
+        # Load bot spec and build router
+        async with async_session() as session:
+            bot_config = await loader.load_spec_by_bot_id(session, bot_id)
+            if not bot_config:
+                return {"ok": False, "error": "Bot not found"}
+
+            # Get bot token from database
+            from sqlalchemy import text
+            bot_token_query = await session.execute(
+                text("SELECT token FROM bots WHERE id = :bot_id"),
+                {"bot_id": bot_id}
+            )
+            bot_token_result = bot_token_query.fetchone()
+            if not bot_token_result:
+                return {"ok": False, "error": "Bot token not found"}
+
+            bot_token = bot_token_result[0]
+
+            # Create aiogram instances
+            bot = Bot(token=bot_token)
+            dp = Dispatcher()
+
+            # Build and include router from spec
+            router = build_router(bot_config["spec_json"])
+            dp.include_router(router)
+
+            # Process the update
+            aiogram_update = Update.model_validate(update)
+            await dp.feed_update(bot, aiogram_update)
+
+            return {"ok": True}
 
     # Add metrics and logging
     tid = with_trace()
