@@ -7,4 +7,5 @@ RUN pip install .
 RUN pip install "git+https://github.com/gagarinyury/aiogram_bot_template@v1.2.0"
 COPY runtime /app/runtime
 COPY migrations /app/migrations
+COPY tests /app/tests
 CMD ["uvicorn", "runtime.main:app", "--host", "0.0.0.0", "--port", "8000"]

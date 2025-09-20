@@ -18,7 +18,9 @@ dependencies = [
     "pydantic-settings",
     "alembic",
     "httpx",
-    "prometheus-client"
+    "prometheus-client",
+    "pytest",
+    "pytest-asyncio"
 ]
 
 [project.optional-dependencies]
