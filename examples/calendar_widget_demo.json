@@ -1,0 +1,146 @@
+{
+  "use": [
+    "flow.wizard.v1",
+    "flow.menu.v1",
+    "widget.calendar.v1",
+    "action.sql_exec.v1",
+    "action.sql_query.v1",
+    "action.reply_template.v1"
+  ],
+  "intents": [
+    {
+      "cmd": "/help",
+      "reply": "📅 Демо календарного виджета:\n\n🗓️ /book_date - выбор даты\n🕐 /book_datetime - выбор даты и времени\n📋 /my_appointments - мои записи\n🏠 /start - главное меню"
+    }
+  ],
+  "flows": [
+    {
+      "type": "flow.menu.v1",
+      "entry_cmd": "/start",
+      "params": {
+        "title": "📅 Календарный виджет - Демо\n\nВыберите действие:",
+        "options": [
+          {"text": "🗓️ Выбрать дату", "callback": "/book_date"},
+          {"text": "🕐 Выбрать дату и время", "callback": "/book_datetime"},
+          {"text": "📋 Мои записи", "callback": "/my_appointments"},
+          {"text": "❓ Справка", "callback": "/help"}
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/book_date",
+      "params": {
+        "steps": [
+          {
+            "widget": {
+              "type": "widget.calendar.v1",
+              "params": {
+                "mode": "date",
+                "var": "appointment_date",
+                "title": "🗓️ Выберите дату записи",
+                "min": "2025-01-01",
+                "max": "2025-12-31"
+              }
+            }
+          },
+          {
+            "ask": "📝 Укажите название записи:\n\nПример: Встреча с врачом, Деловая встреча, Личное дело",
+            "var": "appointment_title"
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "INSERT INTO appointments(bot_id, user_id, date, title, type, created_at) VALUES(:bot_id, :user_id, :appointment_date, :appointment_title, 'date_only', NOW())"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "✅ Запись создана!\n\n📅 Дата: {{appointment_date}}\n📝 Название: {{appointment_title}}\n\nЗапись сохранена в вашем календаре.",
+              "keyboard": [
+                {"text": "📋 Мои записи", "callback": "/my_appointments"},
+                {"text": "➕ Создать ещё", "callback": "/start"},
+                {"text": "🏠 Главное меню", "callback": "/start"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/book_datetime",
+      "params": {
+        "steps": [
+          {
+            "widget": {
+              "type": "widget.calendar.v1",
+              "params": {
+                "mode": "datetime",
+                "var": "appointment_datetime",
+                "title": "🕐 Выберите дату и время записи",
+                "min": "2025-01-01",
+                "max": "2025-06-30",
+                "tz": "Europe/Moscow"
+              }
+            }
+          },
+          {
+            "ask": "📝 Укажите название записи:\n\nПример: Встреча с клиентом, Медицинский осмотр",
+            "var": "appointment_title"
+          },
+          {
+            "ask": "👤 Укажите участников (опционально):\n\nВведите имена или 'пропустить':",
+            "var": "participants"
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "INSERT INTO appointments(bot_id, user_id, datetime, title, participants, type, created_at) VALUES(:bot_id, :user_id, to_timestamp(:appointment_datetime, 'YYYY-MM-DD HH24:MI'), :appointment_title, CASE WHEN :participants = 'пропустить' THEN NULL ELSE :participants END, 'datetime', NOW())"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "✅ Встреча запланирована!\n\n🕐 Дата и время: {{appointment_datetime}}\n📝 Название: {{appointment_title}}\n👥 Участники: {{participants}}\n\n🔔 Мы напомним вам за 15 минут до встречи.",
+              "keyboard": [
+                {"text": "📋 Мои записи", "callback": "/my_appointments"},
+                {"text": "➕ Запланировать ещё", "callback": "/book_datetime"},
+                {"text": "🏠 Главное меню", "callback": "/start"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "entry_cmd": "/my_appointments",
+      "on_enter": [
+        {
+          "type": "action.sql_query.v1",
+          "params": {
+            "sql": "SELECT COALESCE(to_char(datetime, 'DD.MM.YYYY HH24:MI'), date) as display_date, title, participants, type FROM appointments WHERE bot_id=:bot_id AND user_id=:user_id ORDER BY COALESCE(datetime, date::timestamp) DESC LIMIT 10",
+            "result_var": "appointments"
+          }
+        },
+        {
+          "type": "action.reply_template.v1",
+          "params": {
+            "text": "📋 Ваши записи:\n\n{{#each appointments}}📅 {{display_date}}\n📝 {{title}}{{#if participants}}\n👥 {{participants}}{{/if}}\n{{#if type}}🏷️ {{type}}{{/if}}\n\n{{/each}}",
+            "empty_text": "📭 У вас пока нет записей\n\nСоздайте первую запись!",
+            "keyboard": [
+              {"text": "🗓️ Выбрать дату", "callback": "/book_date"},
+              {"text": "🕐 Дата + время", "callback": "/book_datetime"},
+              {"text": "🏠 Главное меню", "callback": "/start"}
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

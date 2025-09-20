@@ -51,9 +51,10 @@ DSL v1 поддерживает:
 |-----------|----------|
 | `flow.wizard.v1` | Пошаговые визарды с состоянием (новый формат) |
 | `flow.menu.v1` | Простые меню с inline-кнопками |
-| `action.sql_exec.v1` | Выполнение SQL команд (INSERT, DELETE) |
+| `action.sql_exec.v1` | Выполнение SQL команд (INSERT, UPDATE, DELETE) |
 | `action.sql_query.v1` | SQL запросы (SELECT) |
 | `action.reply_template.v1` | Шаблонизация ответов |
+| `widget.calendar.v1` | Календарь для выбора даты/времени |
 
 ## Секция `intents`
 
@@ -476,29 +477,129 @@ Wizard flows можно размещать в двух секциях:
 - `:user_id` - ID пользователя
 - `:variable` - любая переменная из контекста визарда
 
+**Возвращаемые данные:**
+```json
+{
+  "success": true,
+  "status": "ok",
+  "rows": 1
+}
+```
+
 **Ограничения безопасности:**
-- Разрешены только INSERT и DELETE
+- Разрешены только INSERT, UPDATE и DELETE
 - Запрещены множественные SQL команды (`;`)
 - Все параметры экранируются автоматически
+- Проверка на опасные SQL операции (DROP, CREATE, ALTER и т.д.)
+
+**Логирование и метрики:**
+- Событие: `action_sql_exec` с полями bot_id, user_id, sql_hash, rows_affected, duration_ms
+- Метрики: `bot_sql_exec_total{bot_id}` (counter), `dsl_action_latency_ms{action="sql_exec"}` (histogram)
+
+**Обработка ошибок:**
+- SQL ошибки логируются и не прерывают выполнение flow
+- Автоматический rollback при ошибках базы данных
+- Метрика `bot_errors_total{code="sql_exec"}` при ошибках
 
 ### action.sql_query.v1
 
-SQL запросы (SELECT):
+SQL запросы для чтения данных (SELECT, WITH):
 
 ```json
 {
-  "action.sql_query.v1": {
+  "type": "action.sql_query.v1",
+  "params": {
     "sql": "SELECT service, slot FROM bookings WHERE bot_id=:bot_id AND user_id=:user_id ORDER BY created_at DESC LIMIT 5",
-    "result_var": "bookings"
+    "result_var": "bookings",
+    "scalar": false,
+    "flatten": false
   }
 }
 ```
 
 **Параметры:**
-- `sql` (string) - SQL запрос
-- `result_var` (string) - имя переменной для результата
+- `sql` (string) - SQL запрос (SELECT или WITH)
+- `result_var` (string) - имя переменной для сохранения результата
+- `scalar` (boolean, опционально) - возвращать одно скалярное значение вместо массива
+- `flatten` (boolean, опционально) - для одной колонки возвращать массив значений вместо объектов
 
-**Результат:** массив объектов с полями из SELECT
+**Доступные параметры в SQL:**
+- `:bot_id` - ID бота (автоматически)
+- `:user_id` - ID пользователя (автоматически)
+- `:variable` - любая переменная из контекста визарда или flow
+
+**Возвращаемые данные:**
+```json
+{
+  "success": true,
+  "rows": 3,
+  "var": "bookings"
+}
+```
+
+**Результат в контексте (зависит от режима):**
+- По умолчанию: `[{"col1": "val1", "col2": "val2"}, ...]` (массив объектов)
+- `scalar: true`: `"single_value"` или `null` (одно значение)
+- `flatten: true` + одна колонка: `["val1", "val2", "val3"]` (массив значений)
+
+**Ограничения безопасности:**
+- Разрешены только SELECT и WITH запросы
+- Запрещены множественные SQL команды (`;`)
+- Автоматическое добавление `LIMIT 100` для запросов без LIMIT
+- Все параметры экранируются автоматически
+- Проверка на опасные SQL операции
+
+**Логирование и метрики:**
+- Событие: `action_sql_query` с полями bot_id, user_id, sql_hash, rows_count, duration_ms
+- Метрики: `bot_sql_query_total{bot_id}` (counter), `dsl_action_latency_ms{action="sql_query"}` (histogram)
+
+**Примеры использования:**
+
+Список записей (по умолчанию):
+```json
+{
+  "type": "action.sql_query.v1",
+  "params": {
+    "sql": "SELECT service, to_char(slot,'YYYY-MM-DD HH24:MI') AS slot_time FROM bookings WHERE bot_id=:bot_id AND user_id=:user_id ORDER BY slot DESC LIMIT 5",
+    "result_var": "bookings"
+  }
+}
+```
+
+Одно значение (scalar):
+```json
+{
+  "type": "action.sql_query.v1",
+  "params": {
+    "sql": "SELECT to_char(slot,'YYYY-MM-DD HH24:MI') FROM bookings WHERE bot_id=:bot_id AND user_id=:user_id ORDER BY slot DESC LIMIT 1",
+    "result_var": "last_slot",
+    "scalar": true
+  }
+}
+```
+
+Массив значений (flatten):
+```json
+{
+  "type": "action.sql_query.v1",
+  "params": {
+    "sql": "SELECT DISTINCT service FROM bookings WHERE bot_id=:bot_id ORDER BY service",
+    "result_var": "services",
+    "flatten": true
+  }
+}
+```
+
+WITH запрос:
+```json
+{
+  "type": "action.sql_query.v1",
+  "params": {
+    "sql": "WITH recent AS (SELECT * FROM bookings WHERE created_at > NOW() - INTERVAL '7 days') SELECT service, COUNT(*) as count FROM recent WHERE bot_id=:bot_id GROUP BY service",
+    "result_var": "recent_stats"
+  }
+}
+```
 
 ### action.reply_template.v1
 
@@ -527,6 +628,90 @@ SQL запросы (SELECT):
 - `callback` (string) - callback_data или intent (если начинается с /)
 
 **Результат:** объект с полями `type: "reply"`, `text`, `keyboard?`
+
+### widget.calendar.v1
+
+Интерактивный календарь для выбора даты или даты+времени:
+
+```json
+{
+  "widget": {
+    "type": "widget.calendar.v1",
+    "params": {
+      "mode": "date",
+      "var": "slot",
+      "title": "Выберите дату записи",
+      "min": "2025-01-01",
+      "max": "2025-12-31",
+      "tz": "Europe/Moscow"
+    }
+  }
+}
+```
+
+**Параметры:**
+- `mode` (string) - режим работы: "date" (только дата) или "datetime" (дата + время)
+- `var` (string) - имя переменной для сохранения результата
+- `title` (string, опционально) - заголовок календаря
+- `min` (string, опционально) - минимальная дата в формате YYYY-MM-DD
+- `max` (string, опционально) - максимальная дата в формате YYYY-MM-DD
+- `tz` (string, опционально) - часовой пояс для datetime режима (по умолчанию UTC)
+
+**Возвращаемые значения:**
+- `mode: "date"`: строка в формате "YYYY-MM-DD" (например: "2025-01-15")
+- `mode: "datetime"`: строка в формате "YYYY-MM-DD HH:MM" (например: "2025-01-15 14:30")
+
+**Поведение:**
+1. Отображает интерактивный календарь с навигацией по месяцам
+2. В режиме "date": после выбора даты сохраняет результат и продолжает flow
+3. В режиме "datetime": после выбора даты показывает сетку времени, затем сохраняет результат
+4. Дни вне диапазона min/max отображаются недоступными
+5. Поддерживает навигацию по месяцам и возврат к выбору даты
+
+**Использование в wizard:**
+```json
+{
+  "type": "flow.wizard.v1",
+  "entry_cmd": "/book",
+  "params": {
+    "steps": [
+      {
+        "widget": {
+          "type": "widget.calendar.v1",
+          "params": {
+            "mode": "datetime",
+            "var": "slot",
+            "title": "Выберите дату и время",
+            "min": "2025-01-01",
+            "max": "2025-06-30"
+          }
+        }
+      },
+      {
+        "ask": "Какая услуга?",
+        "var": "service"
+      }
+    ],
+    "on_complete": [
+      {
+        "type": "action.sql_exec.v1",
+        "params": {
+          "sql": "INSERT INTO bookings(bot_id, user_id, slot, service) VALUES(:bot_id, :user_id, :slot, :service)"
+        }
+      }
+    ]
+  }
+}
+```
+
+**Логирование и метрики:**
+- События: `widget_calendar_render`, `widget_calendar_pick_date`, `widget_calendar_pick_time`
+- Метрики: `widget_calendar_renders_total{bot_id}`, `widget_calendar_picks_total{bot_id,mode}`
+
+**Безопасность:**
+- Callback данные содержат bot_id и user_id для валидации
+- Проверка состояния wizard перед обработкой
+- Ограничение частоты кликов (при необходимости)
 
 ## Шаблонизация
 

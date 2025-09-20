@@ -238,7 +238,13 @@ class WizardEngine:
         # If wizard has steps, start with first step
         if steps and len(steps) > 0:
             await redis_client.set_wizard_state(bot_id, user_id, state, ttl_sec)
-            return steps[0]["ask"]
+
+            first_step = steps[0]
+            # Check if first step is a widget
+            if "widget" in first_step:
+                return await self._handle_widget_step(bot_id, user_id, first_step, session)
+            else:
+                return first_step["ask"]
 
         # No steps, just on_enter actions
         await redis_client.delete_wizard_state(bot_id, user_id)
@@ -308,11 +314,17 @@ class WizardEngine:
             # All steps completed, execute on_complete actions
             return await self._complete_wizard_v1(bot_id, user_id, wizard_flow, vars_data, session)
         else:
-            # Update state and ask next question
+            # Update state and continue to next step
             state["step"] = next_step
             state["vars"] = vars_data
             await redis_client.set_wizard_state(bot_id, user_id, state, ttl_sec)
-            return steps[next_step]["ask"]
+
+            next_step_config = steps[next_step]
+            # Check if next step is a widget
+            if "widget" in next_step_config:
+                return await self._handle_widget_step(bot_id, user_id, next_step_config, session)
+            else:
+                return next_step_config["ask"]
 
     async def _complete_wizard_v1(self, bot_id: str, user_id: int, wizard_flow: WizardFlow, vars_data: Dict[str, Any], session) -> str:
         """Complete v1 wizard flow"""
@@ -385,6 +397,73 @@ class WizardEngine:
                     wizard_flows.append(wizard_flow)
 
         return wizard_flows
+
+    async def _handle_widget_step(self, bot_id: str, user_id: int, step: Dict[str, Any], session) -> Any:
+        """Handle widget step execution"""
+        widget_config = step["widget"]
+        widget_type = widget_config["type"]
+
+        if widget_type == "widget.calendar.v1":
+            from .calendar_widget import calendar_widget
+            return await calendar_widget.render_calendar(bot_id, user_id, widget_config["params"])
+        else:
+            logger.error("wizard_unknown_widget", widget_type=widget_type)
+            return "Неподдерживаемый виджет"
+
+    async def handle_calendar_callback(self, bot_id: str, user_id: int, callback_data: str, session) -> Optional[Any]:
+        """Handle calendar widget callback"""
+        from .calendar_widget import calendar_widget
+
+        # Get current wizard state
+        wizard_state = await redis_client.get_wizard_state(bot_id, user_id)
+        if not wizard_state or wizard_state.get("format") != "v1":
+            return None
+
+        # Handle calendar callback
+        result = await calendar_widget.handle_callback(bot_id, user_id, callback_data, session)
+
+        if result and result.get("type") == "complete":
+            # Calendar widget completed, advance wizard
+            var_name = result["var"]
+            value = result["value"]
+
+            # Store value in wizard state
+            wizard_state["vars"][var_name] = value
+
+            # Move to next step
+            current_step = wizard_state["step"]
+            wizard_flow_data = wizard_state["wizard_flow"]
+            wizard_flow = WizardFlow(**wizard_flow_data)
+            params = wizard_flow.params
+            steps = params.get("steps", [])
+
+            # Log step completion
+            events_logger = create_events_logger(session, bot_id, user_id)
+            await events_logger.log_wizard_step(current_step, var_name)
+
+            # Move to next step
+            next_step = current_step + 1
+
+            if next_step >= len(steps):
+                # Wizard completed
+                await redis_client.delete_wizard_state(bot_id, user_id)
+                return await self._complete_wizard_v1(bot_id, user_id, wizard_flow, wizard_state["vars"], session)
+            else:
+                # Update state and continue
+                wizard_state["step"] = next_step
+                ttl_sec = wizard_state.get("ttl_sec", 86400)
+                await redis_client.set_wizard_state(bot_id, user_id, wizard_state, ttl_sec)
+
+                next_step_config = steps[next_step]
+                if "widget" in next_step_config:
+                    return await self._handle_widget_step(bot_id, user_id, next_step_config, session)
+                else:
+                    return {
+                        "type": "edit_message",
+                        "text": next_step_config["ask"]
+                    }
+
+        return result
 
     async def reset_wizard(self, bot_id: str, user_id: int):
         """Reset/cancel current wizard"""

@@ -200,13 +200,15 @@
       "entry_cmd": "/my_bookings",
       "on_enter": [
         {
-          "action.sql_query.v1": {
+          "type": "action.sql_query.v1",
+          "params": {
             "sql": "SELECT service, slot, phone, created_at FROM bookings WHERE bot_id=:bot_id AND user_id=:user_id ORDER BY created_at DESC LIMIT 10",
             "result_var": "user_bookings"
           }
         },
         {
-          "action.reply_template.v1": {
+          "type": "action.reply_template.v1",
+          "params": {
             "text": "📋 Ваши записи:\\n\\n{{#each user_bookings}}📍 {{service}} — {{slot}}\\n📱 {{phone}}\\n📅 Создано: {{created_at}}\\n\\n{{/each}}",
             "empty_text": "😔 У вас пока нет записей\\n\\nНажмите кнопку ниже, чтобы забронировать услугу!",
             "keyboard": [

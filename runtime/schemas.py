@@ -88,13 +88,18 @@ class Intent(BaseModel):
     reply: str
 
 class WizardStep(BaseModel):
-    ask: str
+    ask: Optional[str] = None
     var: str
     validate: Optional[FlowStepValidation] = None
+    widget: Optional[Dict[str, Any]] = None  # For widget steps
 
 class WizardFlow(BaseModel):
     type: str
     entry_cmd: str
+    params: Dict[str, Any]
+
+class CalendarWidget(BaseModel):
+    type: str
     params: Dict[str, Any]
 
 class BotSpec(BaseModel):

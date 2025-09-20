@@ -131,6 +131,22 @@ def handle_with_spec(spec: Dict[str, Any], text: str) -> str:
                   if i.get("cmd") == text), "Не знаю эту команду")
     return reply
 
+async def handle_callback(bot_id: str, user_id: int, callback_data: str) -> Any:
+    """Handle callback data (for widgets, menus, etc.)"""
+    from .main import async_session
+    from .wizard_engine import wizard_engine
+
+    async with async_session() as session:
+        # Check if this is a calendar callback
+        if callback_data.startswith(("cal_", "cal:")):
+            result = await wizard_engine.handle_calendar_callback(bot_id, user_id, callback_data, session)
+            if result:
+                return result
+
+        # Add other callback handlers here as needed
+        logger.warning("unhandled_callback", bot_id=bot_id, user_id=user_id, callback=callback_data)
+        return None
+
 async def handle(bot_id: str, text: str) -> str:
     """Handle incoming text for bot with wizard and menu support"""
     from .main import async_session

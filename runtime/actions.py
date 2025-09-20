@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import structlog
+from time import perf_counter
 
 logger = structlog.get_logger()
 
@@ -32,11 +33,19 @@ class ActionExecutor:
 
     async def _execute_sql_query(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Execute SQL query action"""
+        from .telemetry import bot_sql_query_total, dsl_action_latency_ms
+
         sql = config["sql"]
         result_var = config["result_var"]
+        scalar = config.get("scalar", False)
+        flatten = config.get("flatten", False)
+        start_time = perf_counter()
 
         # Set action type for security validation
         self._set_action_type('sql_query')
+
+        # Add automatic LIMIT protection if not present
+        sql = self._add_limit_protection(sql)
 
         # Validate SQL safety and build safe parameterized query
         try:
@@ -47,32 +56,64 @@ class ActionExecutor:
             result = await self.session.execute(stmt, params)
             rows = result.fetchall()
 
-            # Convert to list of dicts
-            rows_data = []
-            if rows:
-                columns = result.keys()
-                rows_data = [dict(zip(columns, row)) for row in rows]
+            # Process result based on mode
+            if scalar:
+                # Return single scalar value or None
+                if rows:
+                    result_data = rows[0][0] if len(rows[0]) > 0 else None
+                else:
+                    result_data = None
+            elif flatten and rows and len(result.keys()) == 1:
+                # Return list of scalar values from single column
+                result_data = [row[0] for row in rows]
+            else:
+                # Default: return list of dicts
+                result_data = []
+                if rows:
+                    columns = result.keys()
+                    result_data = [dict(zip(columns, row)) for row in rows]
 
             # Store in context
-            self.context[result_var] = rows_data
+            self.context[result_var] = result_data
+
+            # Record metrics
+            duration_ms = (perf_counter() - start_time) * 1000
+            bot_sql_query_total.labels(self.bot_id).inc()
+            dsl_action_latency_ms.labels("sql_query").observe(duration_ms)
 
             logger.info("sql_query_executed",
+                       bot_id=self.bot_id,
+                       user_id=self.user_id,
                        sql_hash=hash(sql) % 10000,
-                       rows_count=len(rows_data))
+                       rows_count=len(rows),
+                       result_var=result_var,
+                       scalar=scalar,
+                       flatten=flatten,
+                       duration_ms=int(duration_ms))
 
             return {
                 "success": True,
-                "result_var": result_var,
-                "rows_count": len(rows_data)
+                "rows": len(rows),
+                "var": result_var
             }
 
         except Exception as e:
-            logger.error("sql_query_failed", sql_hash=hash(sql) % 10000, error=str(e))
+            duration_ms = (perf_counter() - start_time) * 1000
+
+            logger.error("sql_query_failed",
+                        bot_id=self.bot_id,
+                        user_id=self.user_id,
+                        sql_hash=hash(sql) % 10000,
+                        error=str(e),
+                        duration_ms=int(duration_ms))
             raise
 
     async def _execute_sql_exec(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Execute SQL exec action"""
+        from .telemetry import bot_sql_exec_total, dsl_action_latency_ms
+
         sql = config["sql"]
+        start_time = perf_counter()
 
         # Set action type for security validation
         self._set_action_type('sql_exec')
@@ -86,18 +127,34 @@ class ActionExecutor:
             result = await self.session.execute(stmt, params)
             await self.session.commit()
 
+            # Record metrics
+            duration_ms = (perf_counter() - start_time) * 1000
+            bot_sql_exec_total.labels(self.bot_id).inc()
+            dsl_action_latency_ms.labels("sql_exec").observe(duration_ms)
+
             logger.info("sql_exec_executed",
+                       bot_id=self.bot_id,
+                       user_id=self.user_id,
                        sql_hash=hash(sql) % 10000,
-                       rows_affected=result.rowcount)
+                       rows_affected=result.rowcount,
+                       duration_ms=int(duration_ms))
 
             return {
                 "success": True,
-                "rows_affected": result.rowcount
+                "status": "ok",
+                "rows": result.rowcount
             }
 
         except Exception as e:
             await self.session.rollback()
-            logger.error("sql_exec_failed", sql_hash=hash(sql) % 10000, error=str(e))
+            duration_ms = (perf_counter() - start_time) * 1000
+
+            logger.error("sql_exec_failed",
+                        bot_id=self.bot_id,
+                        user_id=self.user_id,
+                        sql_hash=hash(sql) % 10000,
+                        error=str(e),
+                        duration_ms=int(duration_ms))
             raise
 
     async def _execute_reply_template(self, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -166,11 +223,11 @@ class ActionExecutor:
 
         # Validate statement type based on action
         if action_type == 'sql_query':
-            if not sql_upper.startswith('SELECT'):
-                raise ValueError("Only SELECT statements allowed for sql_query actions")
+            if not (sql_upper.startswith('SELECT') or sql_upper.startswith('WITH')):
+                raise ValueError("Only SELECT and WITH statements allowed for sql_query actions")
         elif action_type == 'sql_exec':
-            if not (sql_upper.startswith('INSERT') or sql_upper.startswith('DELETE')):
-                raise ValueError("Only INSERT and DELETE statements allowed for sql_exec actions")
+            if not (sql_upper.startswith('INSERT') or sql_upper.startswith('UPDATE') or sql_upper.startswith('DELETE')):
+                raise ValueError("Only INSERT, UPDATE and DELETE statements allowed for sql_exec actions")
 
         # Check for dangerous keywords (additional security layer)
         dangerous_patterns = [
@@ -258,6 +315,24 @@ class ActionExecutor:
             keyboard.append([button])
 
         return keyboard
+
+    def _add_limit_protection(self, sql: str) -> str:
+        """Add automatic LIMIT protection if not present"""
+        sql_upper = sql.upper().strip()
+
+        # Check if LIMIT is already present
+        if 'LIMIT' in sql_upper:
+            return sql
+
+        # Check if this is a potentially unbounded query
+        has_select = sql_upper.startswith('SELECT') or 'SELECT' in sql_upper
+        has_table = any(keyword in sql_upper for keyword in ['FROM', 'JOIN'])
+
+        # Add LIMIT 100 for unbounded SELECT queries
+        if has_select and has_table:
+            return f"{sql.rstrip()} LIMIT 100"
+
+        return sql
 
     def set_context_var(self, name: str, value: Any):
         """Set a context variable"""
