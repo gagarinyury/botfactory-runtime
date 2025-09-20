@@ -87,8 +87,19 @@ class Intent(BaseModel):
     cmd: str
     reply: str
 
+class WizardStep(BaseModel):
+    ask: str
+    var: str
+    validate: Optional[FlowStepValidation] = None
+
+class WizardFlow(BaseModel):
+    type: str
+    entry_cmd: str
+    params: Dict[str, Any]
+
 class BotSpec(BaseModel):
     use: Optional[List[str]] = None
     intents: Optional[List[Intent]] = None
     flows: Optional[List[Flow]] = None
     menu_flows: Optional[List[MenuFlow]] = None
+    wizard_flows: Optional[List[WizardFlow]] = None

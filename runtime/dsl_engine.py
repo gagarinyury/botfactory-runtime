@@ -166,6 +166,15 @@ async def handle(bot_id: str, text: str) -> str:
                     if menu_response.get("type") == "reply":
                         return _format_menu_response(menu_response)
 
+            # Try wizard v1 handling
+            wizard_v1_flows = wizard_engine.parse_wizard_flows(spec)
+            if wizard_v1_flows:
+                wizard_v1_response = await wizard_engine.handle_wizard_v1_message(
+                    bot_id, user_id, text, wizard_v1_flows, session
+                )
+                if wizard_v1_response is not None:
+                    return wizard_v1_response
+
             # If spec has flows, try wizard handling
             if bot_spec.flows:
                 wizard_response = await wizard_engine.handle_wizard_message(

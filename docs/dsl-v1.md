@@ -49,7 +49,7 @@ DSL v1 поддерживает:
 
 | Компонент | Описание |
 |-----------|----------|
-| `flow.wizard.v1` | Пошаговые визарды с состоянием |
+| `flow.wizard.v1` | Пошаговые визарды с состоянием (новый формат) |
 | `flow.menu.v1` | Простые меню с inline-кнопками |
 | `action.sql_exec.v1` | Выполнение SQL команд (INSERT, DELETE) |
 | `action.sql_query.v1` | SQL запросы (SELECT) |
@@ -237,6 +237,222 @@ Menu flows можно размещать в двух секциях:
 ### Приоритет обработки
 
 Menu flows имеют приоритет над wizard flows для одинаковых команд.
+
+## Wizard flows (flow.wizard.v1)
+
+Многошаговые диалоги с состоянием для сбора данных от пользователя. Wizard flows сохраняют состояние между шагами и поддерживают валидацию ввода.
+
+### Структура wizard flow
+
+```json
+{
+  "type": "flow.wizard.v1",
+  "entry_cmd": "/команда",
+  "params": {
+    "steps": [
+      {
+        "ask": "Вопрос пользователю",
+        "var": "имя_переменной",
+        "validate": {
+          "regex": "^pattern$",
+          "msg": "Сообщение об ошибке"
+        }
+      }
+    ],
+    "on_enter": [],
+    "on_step": [],
+    "on_complete": [],
+    "ttl_sec": 86400
+  }
+}
+```
+
+### Поля wizard flow
+
+- `type` (string) - должно быть `"flow.wizard.v1"`
+- `entry_cmd` (string) - команда для запуска визарда
+- `params.steps` (array) - массив шагов визарда
+- `params.on_enter` (array, опционально) - действия при запуске
+- `params.on_step` (array, опционально) - действия после каждого шага
+- `params.on_complete` (array, опционально) - действия при завершении
+- `params.ttl_sec` (number, опционально) - TTL состояния в секундах (по умолчанию 86400)
+
+### Поля шага (step)
+
+- `ask` (string) - вопрос пользователю
+- `var` (string) - имя переменной для сохранения ответа
+- `validate` (object, опционально) - правила валидации
+
+### Поля валидации
+
+- `regex` (string) - регулярное выражение для проверки
+- `msg` (string) - сообщение при неуспешной валидации
+
+### Состояние и TTL
+
+Состояние визарда сохраняется в Redis с ключом `state:{bot_id}:{user_id}` и автоматически истекает через `ttl_sec` секунд.
+
+**Структура состояния:**
+```json
+{
+  "format": "v1",
+  "step": 1,
+  "vars": {
+    "service": "massage",
+    "time": "14:00"
+  },
+  "started_at": 1234567890,
+  "ttl_sec": 86400
+}
+```
+
+### Поведение wizard flow
+
+1. **Запуск:** пользователь вводит `entry_cmd`, создается состояние, задается первый вопрос
+2. **Валидация:** если введенный текст не соответствует `regex`, возвращается `msg`
+3. **Переход:** при успешной валидации переменная сохраняется, задается следующий вопрос
+4. **Завершение:** после последнего шага выполняются действия `on_complete`, состояние очищается
+5. **Перезапуск:** повторный ввод `entry_cmd` во время активного визарда сбрасывает состояние
+
+### Примеры wizard flows
+
+#### Простое бронирование
+
+```json
+{
+  "type": "flow.wizard.v1",
+  "entry_cmd": "/book",
+  "params": {
+    "steps": [
+      {
+        "ask": "Выберите услугу: массаж/маникюр/стрижка",
+        "var": "service",
+        "validate": {
+          "regex": "^(массаж|маникюр|стрижка)$",
+          "msg": "Выберите из списка: массаж, маникюр, стрижка"
+        }
+      },
+      {
+        "ask": "Дата и время (YYYY-MM-DD HH:MM)",
+        "var": "slot",
+        "validate": {
+          "regex": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$",
+          "msg": "Используйте формат: YYYY-MM-DD HH:MM"
+        }
+      }
+    ],
+    "on_complete": [
+      {
+        "type": "action.sql_exec.v1",
+        "params": {
+          "sql": "INSERT INTO bookings(bot_id, user_id, service, slot) VALUES(:bot_id, :user_id, :service, to_timestamp(:slot, 'YYYY-MM-DD HH24:MI'))"
+        }
+      },
+      {
+        "type": "action.reply_template.v1",
+        "params": {
+          "text": "✅ Готово! Забронировано: {{service}} на {{slot}}"
+        }
+      }
+    ],
+    "ttl_sec": 3600
+  }
+}
+```
+
+#### Анкета с проверками
+
+```json
+{
+  "type": "flow.wizard.v1",
+  "entry_cmd": "/survey",
+  "params": {
+    "steps": [
+      {
+        "ask": "Как вас зовут?",
+        "var": "name"
+      },
+      {
+        "ask": "Сколько вам лет?",
+        "var": "age",
+        "validate": {
+          "regex": "^\\d{1,3}$",
+          "msg": "Введите возраст числом"
+        }
+      },
+      {
+        "ask": "Оцените сервис от 1 до 5",
+        "var": "rating",
+        "validate": {
+          "regex": "^[1-5]$",
+          "msg": "Оценка должна быть от 1 до 5"
+        }
+      }
+    ],
+    "on_complete": [
+      {
+        "type": "action.sql_exec.v1",
+        "params": {
+          "sql": "INSERT INTO surveys(bot_id, user_id, name, age, rating) VALUES(:bot_id, :user_id, :name, :age, :rating)"
+        }
+      },
+      {
+        "type": "action.reply_template.v1",
+        "params": {
+          "text": "Спасибо, {{name}}! Ваша оценка {{rating}} сохранена."
+        }
+      }
+    ]
+  }
+}
+```
+
+### Размещение wizard flows
+
+Wizard flows можно размещать в двух секциях:
+
+1. **В секции `flows`** - вместе с menu flows:
+```json
+{
+  "use": ["flow.wizard.v1"],
+  "flows": [
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/book",
+      "params": {...}
+    }
+  ]
+}
+```
+
+2. **В секции `wizard_flows`** - отдельно:
+```json
+{
+  "use": ["flow.wizard.v1"],
+  "wizard_flows": [
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/book",
+      "params": {...}
+    }
+  ]
+}
+```
+
+### Приоритет обработки
+
+1. Menu flows (stateless)
+2. **Wizard flows v1** (новый формат)
+3. Legacy wizard flows (старый формат)
+4. Intents
+
+### Безопасность и ограничения
+
+- **SQL безопасность:** только параметризованные запросы
+- **Валидация:** некорректные regex игнорируются с логированием
+- **Ввод:** ограничение длины до 1024 символов
+- **TTL:** автоматическая очистка неактивных визардов
+- **Логирование:** маскирование чувствительных данных
 
 ## Действия (Actions)
 

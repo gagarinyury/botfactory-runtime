@@ -64,6 +64,17 @@ class EventsLogger:
 
         await self.log_event("flow_step", data)
 
+    async def log_wizard_step(self, step: int, var: str, duration_ms: Optional[int] = None):
+        """Log wizard step event"""
+        data = {
+            "step": step,
+            "var": var
+        }
+        if duration_ms is not None:
+            data["duration_ms"] = duration_ms
+
+        await self.log_event("wizard_step", data)
+
     async def log_action_sql(self, sql_hash: int, duration_ms: Optional[int] = None, rows_affected: Optional[int] = None):
         """Log SQL action event"""
         data = {
