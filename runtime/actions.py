@@ -104,18 +104,31 @@ class ActionExecutor:
         """Execute reply template action"""
         text_template = config["text"]
         empty_text = config.get("empty_text")
+        keyboard_config = config.get("keyboard", [])
 
         # Render template
         rendered_text = self._render_template(text_template, empty_text)
 
+        # Build keyboard if provided
+        keyboard = None
+        if keyboard_config:
+            keyboard = self._build_keyboard(keyboard_config)
+
         logger.info("reply_template_executed",
                    template_length=len(text_template),
-                   rendered_length=len(rendered_text))
+                   rendered_length=len(rendered_text),
+                   keyboard_buttons=len(keyboard_config))
 
-        return {
-            "success": True,
-            "rendered_text": rendered_text
+        result = {
+            "type": "reply",
+            "text": rendered_text,
+            "success": True
         }
+
+        if keyboard:
+            result["keyboard"] = keyboard
+
+        return result
 
     def _build_safe_parameters(self) -> Dict[str, Any]:
         """Build safe parameters for SQLAlchemy bound parameters"""
@@ -219,6 +232,32 @@ class ActionExecutor:
         result = re.sub(each_pattern, replace_each, result, flags=re.DOTALL)
 
         return result
+
+    def _build_keyboard(self, keyboard_config: List[Dict[str, str]]) -> List[List[Dict[str, str]]]:
+        """Build inline keyboard from configuration"""
+        keyboard = []
+
+        for button_config in keyboard_config:
+            text = button_config["text"]
+            callback = button_config["callback"]
+
+            # Determine callback type
+            if callback.startswith("/"):
+                # This is an intent - will be handled by DSL engine
+                callback_data = callback
+            else:
+                # Regular callback data
+                callback_data = callback
+
+            button = {
+                "text": text,
+                "callback_data": callback_data
+            }
+
+            # Each button on its own row for simplicity
+            keyboard.append([button])
+
+        return keyboard
 
     def set_context_var(self, name: str, value: Any):
         """Set a context variable"""

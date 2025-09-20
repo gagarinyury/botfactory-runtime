@@ -2,6 +2,9 @@ from typing import Dict, Any, List
 from fastapi import APIRouter
 import json
 from aiogram import Router
+import structlog
+
+logger = structlog.get_logger()
 
 class DSLEngine:
     def __init__(self):
@@ -129,9 +132,10 @@ def handle_with_spec(spec: Dict[str, Any], text: str) -> str:
     return reply
 
 async def handle(bot_id: str, text: str) -> str:
-    """Handle incoming text for bot with wizard support"""
+    """Handle incoming text for bot with wizard and menu support"""
     from .main import async_session
     from .wizard_engine import wizard_engine
+    from .menu_engine import menu_engine
     from .schemas import BotSpec, Flow
 
     spec = await load_spec(bot_id)
@@ -140,19 +144,30 @@ async def handle(bot_id: str, text: str) -> str:
     try:
         bot_spec = BotSpec(**spec)
 
-        # If spec has flows, try wizard handling first
-        if bot_spec.flows:
-            async with async_session() as session:
-                # Get user_id from request context (set by telegram handler)
-                from contextvars import ContextVar
-                _user_context: ContextVar[int] = ContextVar('user_id', default=None)
-                user_id = _user_context.get()
+        async with async_session() as session:
+            # Get user_id from request context (set by telegram handler)
+            from contextvars import ContextVar
+            _user_context: ContextVar[int] = ContextVar('user_id', default=None)
+            user_id = _user_context.get()
 
-                if user_id is None:
-                    logger.warning("no_user_context", bot_id=bot_id, text=text)
-                    # For testing/preview, use a default user_id
-                    user_id = 999999  # Clear test user ID
+            if user_id is None:
+                logger.warning("no_user_context", bot_id=bot_id, text=text)
+                # For testing/preview, use a default user_id
+                user_id = 999999  # Clear test user ID
 
+            # Try menu handling first (simple, stateless)
+            menu_flows = menu_engine.parse_menu_flows(spec)
+            if menu_flows:
+                menu_response = await menu_engine.handle_menu_command(
+                    bot_id, user_id, text, menu_flows, session
+                )
+                if menu_response is not None:
+                    # Format response similar to wizard engine
+                    if menu_response.get("type") == "reply":
+                        return _format_menu_response(menu_response)
+
+            # If spec has flows, try wizard handling
+            if bot_spec.flows:
                 wizard_response = await wizard_engine.handle_wizard_message(
                     bot_id, user_id, text, bot_spec.flows, session
                 )
@@ -172,6 +187,17 @@ async def handle(bot_id: str, text: str) -> str:
 
     # Legacy handling
     return handle_with_spec(spec, text)
+
+def _format_menu_response(response: Dict[str, Any]) -> str:
+    """Format menu response for return"""
+    # For now, return just the text to maintain compatibility
+    # In the future, this could return structured data for keyboard handling
+    if "keyboard" in response:
+        # TODO: Implement keyboard handling in API responses
+        # For now, just return text
+        return response["text"]
+    else:
+        return response["text"]
 
 def build_router(spec) -> Router:
     """Build aiogram Router from spec_json"""

@@ -413,3 +413,106 @@ class TestEdgeCases:
         template = "   \\n\\t   "
         result = self.executor._render_template(template)
         assert result == template
+
+
+class TestKeyboardBuilder:
+    """Test inline keyboard building functionality"""
+
+    def setup_method(self):
+        """Setup test fixtures"""
+        # Mock session and create executor
+        self.mock_session = AsyncMock()
+        self.executor = ActionExecutor(self.mock_session, "test-bot-id", 12345)
+
+    def test_simple_keyboard_builder(self):
+        """Test building simple keyboard"""
+        keyboard_config = [
+            {"text": "Button 1", "callback": "btn1"},
+            {"text": "Button 2", "callback": "btn2"}
+        ]
+
+        result = self.executor._build_keyboard(keyboard_config)
+
+        expected = [
+            [{"text": "Button 1", "callback_data": "btn1"}],
+            [{"text": "Button 2", "callback_data": "btn2"}]
+        ]
+        assert result == expected
+
+    def test_keyboard_with_intent_callbacks(self):
+        """Test keyboard with intent callbacks starting with /"""
+        keyboard_config = [
+            {"text": "Забронировать", "callback": "/book"},
+            {"text": "Мои записи", "callback": "/my"},
+            {"text": "Отмена", "callback": "cancel_action"}
+        ]
+
+        result = self.executor._build_keyboard(keyboard_config)
+
+        expected = [
+            [{"text": "Забронировать", "callback_data": "/book"}],
+            [{"text": "Мои записи", "callback_data": "/my"}],
+            [{"text": "Отмена", "callback_data": "cancel_action"}]
+        ]
+        assert result == expected
+
+    def test_empty_keyboard(self):
+        """Test empty keyboard configuration"""
+        keyboard_config = []
+        result = self.executor._build_keyboard(keyboard_config)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_reply_template_with_keyboard(self):
+        """Test reply template action with keyboard"""
+        config = {
+            "text": "Выберите действие:",
+            "keyboard": [
+                {"text": "Забронировать", "callback": "/book"},
+                {"text": "Мои записи", "callback": "/my"}
+            ]
+        }
+
+        result = await self.executor._execute_reply_template(config)
+
+        assert result["type"] == "reply"
+        assert result["text"] == "Выберите действие:"
+        assert result["success"] is True
+        assert "keyboard" in result
+        assert len(result["keyboard"]) == 2
+        assert result["keyboard"][0][0]["text"] == "Забронировать"
+        assert result["keyboard"][0][0]["callback_data"] == "/book"
+
+    @pytest.mark.asyncio
+    async def test_reply_template_without_keyboard(self):
+        """Test reply template action without keyboard"""
+        config = {
+            "text": "Простой ответ"
+        }
+
+        result = await self.executor._execute_reply_template(config)
+
+        assert result["type"] == "reply"
+        assert result["text"] == "Простой ответ"
+        assert result["success"] is True
+        assert "keyboard" not in result
+
+    @pytest.mark.asyncio
+    async def test_reply_template_with_variables_and_keyboard(self):
+        """Test reply template with variables and keyboard"""
+        self.executor.set_context_var("username", "Анна")
+
+        config = {
+            "text": "Привет, {{username}}! Что будем делать?",
+            "keyboard": [
+                {"text": "Начать", "callback": "/start"},
+                {"text": "Помощь", "callback": "/help"}
+            ]
+        }
+
+        result = await self.executor._execute_reply_template(config)
+
+        assert result["type"] == "reply"
+        assert result["text"] == "Привет, Анна! Что будем делать?"
+        assert result["success"] is True
+        assert len(result["keyboard"]) == 2

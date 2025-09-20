@@ -60,13 +60,14 @@ class WizardEngine:
                     return "Произошла ошибка при запуске."
 
                 # If this is a reply template action, return immediately
-                if "rendered_text" in result:
+                if result.get("type") == "reply":
                     await redis_client.delete_wizard_state(bot_id, user_id)
                     await events_logger.log_action_reply(
                         result.get("template_length", 0),
-                        len(result["rendered_text"])
+                        len(result["text"])
                     )
-                    return result["rendered_text"]
+                    # Return structured response for keyboard handling
+                    return self._format_response(result)
 
         # If flow has steps, start with first step
         if flow.steps and len(flow.steps) > 0:
@@ -155,13 +156,24 @@ class WizardEngine:
                     logger.error("wizard_on_complete_failed", result=result)
                     return "Произошла ошибка при завершении."
 
-                # If this is a reply template action, use its text as final response
-                if "rendered_text" in result:
-                    final_response = result["rendered_text"]
+                # If this is a reply template action, use its response as final response
+                if result.get("type") == "reply":
+                    final_response = self._format_response(result)
 
             return final_response
 
         return "Визард завершён."
+
+    def _format_response(self, result: Dict[str, Any]) -> Any:
+        """Format action response for return"""
+        # For now, return just the text to maintain compatibility
+        # In the future, this could return structured data for keyboard handling
+        if "keyboard" in result:
+            # TODO: Implement keyboard handling in DSL engine
+            # For now, just return text
+            return result["text"]
+        else:
+            return result["text"]
 
     async def reset_wizard(self, bot_id: str, user_id: int):
         """Reset/cancel current wizard"""

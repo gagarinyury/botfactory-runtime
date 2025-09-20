@@ -1,0 +1,124 @@
+{
+  "use": [
+    "flow.wizard.v1",
+    "action.sql_exec.v1",
+    "action.sql_query.v1",
+    "action.reply_template.v1"
+  ],
+  "intents": [
+    {
+      "cmd": "/start",
+      "reply": "Добро пожаловать! 👋\\nЭто демонстрация новых inline-клавиатур в DSL v1"
+    }
+  ],
+  "flows": [
+    {
+      "entry_cmd": "/menu",
+      "on_enter": [
+        {
+          "action.reply_template.v1": {
+            "text": "🏠 Главное меню\\nВыберите действие:",
+            "keyboard": [
+              {"text": "📅 Забронировать", "callback": "/book"},
+              {"text": "📋 Мои записи", "callback": "/my"},
+              {"text": "❌ Отменить бронь", "callback": "/cancel"},
+              {"text": "ℹ️ Помощь", "callback": "/help"}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "entry_cmd": "/book",
+      "steps": [
+        {
+          "ask": "Какую услугу хотите забронировать?",
+          "var": "service",
+          "validate": {
+            "regex": "^(massage|spa|consultation)$",
+            "msg": "Выберите из доступных: massage, spa, consultation"
+          }
+        },
+        {
+          "ask": "На какое время? (формат: YYYY-MM-DD HH:MM)",
+          "var": "slot",
+          "validate": {
+            "regex": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$",
+            "msg": "Используйте формат: 2024-01-15 14:00"
+          }
+        }
+      ],
+      "on_complete": [
+        {
+          "action.sql_exec.v1": {
+            "sql": "INSERT INTO bookings(bot_id, user_id, service, slot) VALUES(:bot_id, :user_id, :service, :slot::timestamptz)"
+          }
+        },
+        {
+          "action.reply_template.v1": {
+            "text": "✅ Успешно забронировано!\\n\\n📋 Детали:\\n• Услуга: {{service}}\\n• Время: {{slot}}\\n\\nСпасибо за выбор нашего сервиса! 🙏",
+            "keyboard": [
+              {"text": "🏠 В главное меню", "callback": "/menu"},
+              {"text": "📋 Мои записи", "callback": "/my"}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "entry_cmd": "/my",
+      "on_enter": [
+        {
+          "action.sql_query.v1": {
+            "sql": "SELECT service, slot, created_at FROM bookings WHERE bot_id=:bot_id AND user_id=:user_id ORDER BY created_at DESC LIMIT 5",
+            "result_var": "bookings"
+          }
+        },
+        {
+          "action.reply_template.v1": {
+            "text": "📋 Ваши записи:\\n\\n{{#each bookings}}📍 {{service}} — {{slot}}\\n{{/each}}",
+            "empty_text": "У вас пока нет записей 😔\\n\\nНажмите \"Забронировать\", чтобы создать первую запись!",
+            "keyboard": [
+              {"text": "📅 Забронировать", "callback": "/book"},
+              {"text": "❌ Отменить последнюю", "callback": "/cancel"},
+              {"text": "🏠 В главное меню", "callback": "/menu"}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "entry_cmd": "/cancel",
+      "on_enter": [
+        {
+          "action.sql_exec.v1": {
+            "sql": "DELETE FROM bookings WHERE bot_id=:bot_id AND user_id=:user_id AND id=(SELECT id FROM bookings WHERE bot_id=:bot_id AND user_id=:user_id ORDER BY created_at DESC LIMIT 1)"
+          }
+        },
+        {
+          "action.reply_template.v1": {
+            "text": "❌ Последняя запись отменена\\n\\nЧто делаем дальше?",
+            "keyboard": [
+              {"text": "📅 Забронировать заново", "callback": "/book"},
+              {"text": "📋 Посмотреть записи", "callback": "/my"},
+              {"text": "🏠 В главное меню", "callback": "/menu"}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "entry_cmd": "/help",
+      "on_enter": [
+        {
+          "action.reply_template.v1": {
+            "text": "ℹ️ Помощь по боту\\n\\n🔹 /menu — главное меню\\n🔹 /book — забронировать услугу\\n🔹 /my — посмотреть записи\\n🔹 /cancel — отменить последнюю запись\\n\\nВсе команды доступны через кнопки! 👆",
+            "keyboard": [
+              {"text": "🏠 В главное меню", "callback": "/menu"}
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

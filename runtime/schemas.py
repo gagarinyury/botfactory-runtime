@@ -58,9 +58,23 @@ class SqlQueryAction(Action):
 class SqlExecAction(Action):
     sql: str
 
+class KeyboardButton(BaseModel):
+    text: str
+    callback: str
+
 class ReplyTemplateAction(Action):
     text: str
     empty_text: Optional[str] = None
+    keyboard: Optional[List[KeyboardButton]] = None
+
+class MenuOption(BaseModel):
+    text: str
+    callback: str
+
+class MenuFlow(BaseModel):
+    type: str
+    entry_cmd: str
+    params: Dict[str, Any]
 
 class Flow(BaseModel):
     entry_cmd: str
@@ -77,3 +91,4 @@ class BotSpec(BaseModel):
     use: Optional[List[str]] = None
     intents: Optional[List[Intent]] = None
     flows: Optional[List[Flow]] = None
+    menu_flows: Optional[List[MenuFlow]] = None
