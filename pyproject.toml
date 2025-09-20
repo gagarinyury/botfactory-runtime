@@ -21,7 +21,8 @@ dependencies = [
     "prometheus-client",
     "pytest",
     "pytest-asyncio",
-    "structlog"
+    "structlog",
+    "cachetools"
 ]
 
 [project.optional-dependencies]

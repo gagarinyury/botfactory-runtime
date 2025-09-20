@@ -20,7 +20,8 @@ async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False
 
 # Simple cache for invalidation demo
 bot_cache = {}
-router_cache = {}
+from cachetools import TTLCache
+router_cache = TTLCache(maxsize=256, ttl=600)  # 256 ботов, 10 минут
 
 async def get_router(bot_id: str):
     """Get cached router for bot_id, rebuild if not cached"""
