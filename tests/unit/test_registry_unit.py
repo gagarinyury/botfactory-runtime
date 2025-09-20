@@ -10,7 +10,7 @@ async def test_create_bot():
 
     # Mock database session and result
     mock_session = AsyncMock()
-    mock_result = AsyncMock()
+    mock_result = MagicMock()
     mock_bot = MagicMock()
 
     # Configure mock bot object
@@ -56,7 +56,7 @@ async def test_get_bot():
 
     # Mock database session
     mock_session = AsyncMock()
-    mock_result = AsyncMock()
+    mock_result = MagicMock()
     mock_bot = MagicMock()
 
     mock_bot.id = "test-bot-id"
@@ -98,7 +98,7 @@ async def test_update_bot():
 
     # Mock database session
     mock_session = AsyncMock()
-    mock_result = AsyncMock()
+    mock_result = MagicMock()
     mock_bot = MagicMock()
 
     mock_bot.id = "test-bot-id"
@@ -181,7 +181,7 @@ async def test_list_bots():
 
     # Mock database session
     mock_session = AsyncMock()
-    mock_result = AsyncMock()
+    mock_result = MagicMock()
 
     # Create mock bots
     mock_bot1 = MagicMock()

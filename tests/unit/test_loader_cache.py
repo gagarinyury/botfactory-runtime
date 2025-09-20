@@ -1,6 +1,6 @@
 """Test bot loader caching functionality"""
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from runtime.loader import BotLoader
 from runtime.main import bot_cache
 
@@ -11,8 +11,8 @@ async def test_load_spec_by_bot_id():
 
     # Mock database session and response
     mock_session = AsyncMock()
-    mock_result = AsyncMock()
-    mock_row = AsyncMock()
+    mock_result = MagicMock()
+    mock_row = MagicMock()
 
     # Configure mock return values
     mock_row.name = "test-bot"
@@ -57,8 +57,8 @@ async def test_load_spec_with_version():
 
     # Mock database session
     mock_session = AsyncMock()
-    mock_result = AsyncMock()
-    mock_row = AsyncMock()
+    mock_result = MagicMock()
+    mock_row = MagicMock()
 
     mock_row.name = "test-bot"
     mock_row.token = "test-token"

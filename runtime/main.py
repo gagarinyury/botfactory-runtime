@@ -7,6 +7,7 @@ from .loader import BotLoader
 from .dsl_engine import DSLEngine
 from prometheus_client import generate_latest
 from .logging_setup import log  # импорт даёт конфиг
+from .schemas import PreviewRequest, BotReplyResponse
 
 app = FastAPI()
 registry = BotRegistry()
@@ -78,18 +79,32 @@ async def reload_bot(bot_id: str):
 def metrics():
     return Response(generate_latest(), media_type="text/plain")
 
-@app.post("/preview/send")
-async def preview_send(p: dict):
-    bot_id, text = p["bot_id"], p["text"]
+@app.post("/preview/send", response_model=BotReplyResponse)
+async def preview_send(p: PreviewRequest):
+    bot_id = str(p.bot_id)
+    text = p.text
     from .dsl_engine import handle
     from .telemetry import measure
     from .logging import with_trace
     tid = with_trace()
-    log.info("preview", trace_id=tid, bot_id=bot_id, text=text)
-    return {"bot_reply": await measure(bot_id, handle, bot_id, text)}
+    log.info("preview", trace_id=tid, bot_id=bot_id, text=text[:64])  # limit text in logs
+    bot_reply = await measure(bot_id, handle, bot_id, text)
+    return {"bot_reply": bot_reply}
 
 @app.post("/tg/{bot_id}")
 async def tg_webhook(bot_id: str, update: dict):
-    router = await get_router(bot_id)   # пересобери при reload
-    # передай update в aiogram Dispatcher, связанный с router (минимальная обвязка)
-    return {"ok": True}
+    from .telemetry import measure
+    from .logging import with_trace
+
+    async def process_update(bot_id: str, update: dict):
+        """Process Telegram update"""
+        router = await get_router(bot_id)   # пересобери при reload
+        # передай update в aiogram Dispatcher, связанный с router (минимальная обвязка)
+        return {"ok": True}
+
+    # Add metrics and logging
+    tid = with_trace()
+    log.info("webhook", trace_id=tid, bot_id=bot_id, update_id=update.get("update_id"))
+
+    result = await measure(bot_id, process_update, bot_id, update)
+    return result
