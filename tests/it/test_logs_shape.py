@@ -9,6 +9,15 @@ from runtime.logging import with_trace
 
 client = TestClient(app)
 
+# Mock logging for tests to avoid log output
+@pytest.fixture(autouse=True)
+def mock_logging(monkeypatch):
+    """Mock logging functions to avoid output during tests"""
+    monkeypatch.setattr("runtime.logging_setup.log.info", lambda *a, **k: None)
+    monkeypatch.setattr("runtime.logging_setup.log.error", lambda *a, **k: None)
+    monkeypatch.setattr("runtime.logging_setup.log.warning", lambda *a, **k: None)
+    monkeypatch.setattr("runtime.logging_setup.log.debug", lambda *a, **k: None)
+
 def test_trace_id_generation():
     """Test that trace_id is generated correctly"""
     trace_id = with_trace()

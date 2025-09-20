@@ -122,12 +122,16 @@ async def load_spec(bot_id: str) -> Dict[str, Any]:
             return bot_config["spec_json"]
         return {}
 
-async def handle(bot_id: str, text: str) -> str:
-    """Handle incoming text for bot"""
-    spec = await load_spec(bot_id)
+def handle_with_spec(spec: Dict[str, Any], text: str) -> str:
+    """Pure function: handle text with given spec (for unit tests)"""
     reply = next((i["reply"] for i in spec.get("intents", [])
                   if i.get("cmd") == text), "Не знаю эту команду")
     return reply
+
+async def handle(bot_id: str, text: str) -> str:
+    """Handle incoming text for bot"""
+    spec = await load_spec(bot_id)
+    return handle_with_spec(spec, text)
 
 def build_router(spec) -> Router:
     """Build aiogram Router from spec_json"""

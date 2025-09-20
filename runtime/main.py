@@ -45,9 +45,15 @@ def health(): return {"ok": True}
 
 @app.get("/health/db")
 async def health_db():
-    async with async_session() as session:
-        db_status = await registry.db_ok(session)
-        return {"db_ok": db_status}
+    from fastapi import Response
+    try:
+        async with async_session() as session:
+            db_status = await registry.db_ok(session)
+            if not db_status:
+                return Response(content='{"db_ok": false}', status_code=503, media_type="application/json")
+            return {"db_ok": True}
+    except Exception:
+        return Response(content='{"db_ok": false}', status_code=503, media_type="application/json")
 
 @app.get("/bots/{bot_id}")
 async def get_bot_spec(bot_id: str):
@@ -84,17 +90,29 @@ async def preview_send(p: PreviewRequest):
     bot_id = str(p.bot_id)
     text = p.text
     from .dsl_engine import handle
-    from .telemetry import measure
+    from .telemetry import measured_preview
     from .logging import with_trace
+    from .http_errors import fail
+
     tid = with_trace()
     log.info("preview", trace_id=tid, bot_id=bot_id, text=text[:64])  # limit text in logs
-    bot_reply = await measure(bot_id, handle, bot_id, text)
-    return {"bot_reply": bot_reply}
+
+    try:
+        bot_reply = await measured_preview(bot_id, handle, bot_id, text)
+        return {"bot_reply": bot_reply}
+    except Exception as e:
+        if "db" in str(e).lower() or "database" in str(e).lower():
+            fail(503, "db_unavailable")
+        elif isinstance(e, KeyError):
+            fail(400, "bad_request", field=str(e))
+        else:
+            fail(500, "internal_error", detail=str(e))
 
 @app.post("/tg/{bot_id}")
 async def tg_webhook(bot_id: str, update: dict):
-    from .telemetry import measure
+    from .telemetry import measured_webhook
     from .logging import with_trace
+    from .http_errors import fail
 
     async def process_update(bot_id: str, update: dict):
         """Process Telegram update"""
@@ -106,5 +124,13 @@ async def tg_webhook(bot_id: str, update: dict):
     tid = with_trace()
     log.info("webhook", trace_id=tid, bot_id=bot_id, update_id=update.get("update_id"))
 
-    result = await measure(bot_id, process_update, bot_id, update)
-    return result
+    try:
+        result = await measured_webhook(bot_id, process_update, bot_id, update)
+        return result
+    except Exception as e:
+        if "db" in str(e).lower() or "database" in str(e).lower():
+            fail(503, "db_unavailable")
+        elif isinstance(e, KeyError):
+            fail(400, "bad_request", field=str(e))
+        else:
+            fail(500, "internal_error", detail=str(e))

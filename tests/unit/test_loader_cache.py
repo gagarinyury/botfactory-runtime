@@ -41,7 +41,7 @@ async def test_load_spec_not_found():
 
     # Mock database session with no results
     mock_session = AsyncMock()
-    mock_result = AsyncMock()
+    mock_result = MagicMock()
     mock_result.fetchone.return_value = None
     mock_session.execute.return_value = mock_result
 
@@ -133,7 +133,7 @@ async def test_get_bot_config_fallback():
 
     # Mock session that returns None from database
     mock_session = AsyncMock()
-    mock_result = AsyncMock()
+    mock_result = MagicMock()
     mock_result.fetchone.return_value = None
     mock_session.execute.return_value = mock_result
 

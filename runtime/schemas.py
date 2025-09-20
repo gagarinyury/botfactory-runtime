@@ -1,28 +1,32 @@
 """Pydantic schemas for request validation"""
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, UUID4
 from typing import Union
 import uuid
 
 class PreviewRequest(BaseModel):
-    bot_id: Union[str, uuid.UUID]
+    model_config = ConfigDict(extra="forbid")
+
+    bot_id: Union[str, UUID4]
     text: str
 
-    class Config:
-        # Allow both string and UUID types for bot_id
-        json_encoders = {
-            uuid.UUID: str
-        }
-
 class ReloadResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     bot_id: str
     cache_invalidated: bool
     message: str
 
 class HealthResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     ok: bool
 
 class HealthDBResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     db_ok: bool
 
 class BotReplyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     bot_reply: str

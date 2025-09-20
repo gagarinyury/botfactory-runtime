@@ -10,4 +10,10 @@ down:
 psql:
 	docker compose exec -it pg psql -U dev -d botfactory
 
-.PHONY: dev logs down psql
+test:
+	docker compose exec -T runtime pytest -q
+
+testv:
+	docker compose exec -T runtime pytest -v
+
+.PHONY: dev logs down psql test testv

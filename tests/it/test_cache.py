@@ -118,41 +118,51 @@ def test_cache_invalidation_via_reload():
     # Verify cache was cleared
     assert bot_id not in bot_cache
 
-@patch('runtime.main.async_session')
-@patch('runtime.main.loader')
-def test_get_router_caching_behavior(mock_loader, mock_session):
+@pytest.mark.asyncio
+async def test_get_router_caching_behavior():
     """Test get_router function caching behavior"""
     from runtime.main import get_router
 
     # Clear router cache
     router_cache.clear()
 
-    # Mock database response
-    mock_session_instance = AsyncMock()
-    mock_session.return_value.__aenter__.return_value = mock_session_instance
-
-    mock_bot_config = {
-        "spec_json": {"intents": [{"cmd": "/test", "reply": "Test"}]}
-    }
-    mock_loader.load_spec_by_bot_id.return_value = mock_bot_config
-
     test_bot_id = "router-cache-test"
 
-    # First call should load from database
-    router1 = get_router(test_bot_id)
+    with patch('runtime.main.loader') as mock_loader, \
+         patch('runtime.main.async_session') as mock_session:
 
-    # Verify database was called
-    mock_loader.load_spec_by_bot_id.assert_called()
+        # Mock database response
+        mock_session_instance = AsyncMock()
+        mock_session.return_value.__aenter__.return_value = mock_session_instance
 
-    # Second call should use cache
-    mock_loader.reset_mock()
-    router2 = get_router(test_bot_id)
+        mock_bot_config = {
+            "spec_json": {"intents": [{"cmd": "/test", "reply": "Test"}]}
+        }
+        mock_loader.load_spec_by_bot_id.return_value = mock_bot_config
 
-    # Database should not be called again
-    mock_loader.load_spec_by_bot_id.assert_not_called()
+        # First call should load from database
+        router1 = await get_router(test_bot_id)
 
-    # Both calls should return cached result
-    # Note: This is an async function, so we need to handle properly
+        # Verify database was called
+        mock_loader.load_spec_by_bot_id.assert_called()
+
+        # Second call should use cache
+        mock_loader.reset_mock()
+        router2 = await get_router(test_bot_id)
+
+        # Database should not be called again due to cache
+        mock_loader.load_spec_by_bot_id.assert_not_called()
+
+def test_router_cache_maxsize_limit():
+    """Test TTL cache maxsize limitation"""
+    router_cache.clear()
+
+    # Fill cache beyond maxsize (256)
+    for i in range(300):
+        router_cache[f"bot-{i}"] = {"router": f"data-{i}"}
+
+    # Should not exceed maxsize
+    assert len(router_cache) <= 256
 
 def test_multiple_bot_cache_isolation():
     """Test that different bots have isolated cache entries"""
