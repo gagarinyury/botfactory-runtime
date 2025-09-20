@@ -1,6 +1,12 @@
 """Unified HTTP error handling"""
 from fastapi import HTTPException
 
-def fail(status: int, msg: str, **extra):
+def fail(code: int, name: str, msg: str = "", **details):
     """Raise HTTPException with consistent error format"""
-    raise HTTPException(status, {"error": msg, **extra})
+    raise HTTPException(code, {
+        "error": {
+            "code": name,
+            "message": msg,
+            "details": details
+        }
+    })

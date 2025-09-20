@@ -25,7 +25,7 @@ def test_build_router_closure():
     assert "handlers" in router_config
     assert len(router_config["handlers"]) > 0
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_handle_commands_no_closure():
     """Test that handle function returns correct responses for different commands"""
     from runtime.dsl_engine import handle

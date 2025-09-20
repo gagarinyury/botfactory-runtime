@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from runtime.registry import BotRegistry
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_create_bot():
     """Test creating a new bot"""
     registry = BotRegistry()
@@ -34,7 +34,7 @@ async def test_create_bot():
     # Verify session.commit was called
     mock_session.commit.assert_called_once()
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_create_bot_error():
     """Test bot creation with database error"""
     registry = BotRegistry()
@@ -49,7 +49,7 @@ async def test_create_bot_error():
 
     mock_session.rollback.assert_called_once()
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_bot():
     """Test getting a bot by ID"""
     registry = BotRegistry()
@@ -76,7 +76,7 @@ async def test_get_bot():
     assert result["token"] == "test-token"
     assert result["status"] == "active"
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_bot_not_found():
     """Test getting non-existent bot"""
     registry = BotRegistry()
@@ -91,7 +91,7 @@ async def test_get_bot_not_found():
 
     assert result is None
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_update_bot():
     """Test updating bot information"""
     registry = BotRegistry()
@@ -125,7 +125,7 @@ async def test_update_bot():
 
     mock_session.commit.assert_called_once()
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_update_bot_no_changes():
     """Test updating bot with no actual changes"""
     registry = BotRegistry()
@@ -142,7 +142,7 @@ async def test_update_bot_no_changes():
         mock_get_bot.assert_called_once_with(mock_session, "test-id")
         assert result == {"id": "test-id", "name": "test"}
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_delete_bot():
     """Test deleting a bot"""
     registry = BotRegistry()
@@ -159,7 +159,7 @@ async def test_delete_bot():
     assert result is True
     mock_session.commit.assert_called_once()
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_delete_bot_not_found():
     """Test deleting non-existent bot"""
     registry = BotRegistry()
@@ -174,7 +174,7 @@ async def test_delete_bot_not_found():
 
     assert result is False
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_list_bots():
     """Test listing all bots"""
     registry = BotRegistry()
@@ -206,7 +206,7 @@ async def test_list_bots():
     assert result[0]["name"] == "Bot 1"
     assert result[1]["name"] == "Bot 2"
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_list_bots_empty():
     """Test listing bots when none exist"""
     registry = BotRegistry()
@@ -221,7 +221,7 @@ async def test_list_bots_empty():
 
     assert result == []
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_db_ok():
     """Test database health check"""
     registry = BotRegistry()
@@ -234,7 +234,7 @@ async def test_db_ok():
     assert result is True
     mock_session.execute.assert_called_once()
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_db_ok_failure():
     """Test database health check failure"""
     registry = BotRegistry()

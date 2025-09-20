@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from runtime.loader import BotLoader
 from runtime.main import bot_cache
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_load_spec_by_bot_id():
     """Test basic spec loading functionality"""
     loader = BotLoader()
@@ -34,7 +34,7 @@ async def test_load_spec_by_bot_id():
     assert result["version"] == 1
     assert "spec_json" in result
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_load_spec_not_found():
     """Test loading spec for non-existent bot"""
     loader = BotLoader()
@@ -50,7 +50,7 @@ async def test_load_spec_not_found():
 
     assert result is None
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_load_spec_with_version():
     """Test loading specific version of spec"""
     loader = BotLoader()
@@ -117,7 +117,7 @@ def test_cache_invalidation_scenario():
     # Verify cache is cleared
     assert test_bot_id not in bot_cache
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_load_from_plugin_not_implemented():
     """Test that plugin loading returns None (not implemented)"""
     loader = BotLoader()
@@ -126,7 +126,7 @@ async def test_load_from_plugin_not_implemented():
 
     assert result is None
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_bot_config_fallback():
     """Test get_bot_config fallback behavior"""
     loader = BotLoader()

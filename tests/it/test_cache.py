@@ -118,7 +118,7 @@ def test_cache_invalidation_via_reload():
     # Verify cache was cleared
     assert bot_id not in bot_cache
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_get_router_caching_behavior():
     """Test get_router function caching behavior"""
     from runtime.main import get_router
