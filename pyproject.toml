@@ -15,6 +15,7 @@ dependencies = [
     "sqlalchemy>=2",
     "psycopg[binary,pool]",
     "redis",
+    "aioredis",
     "pydantic-settings",
     "alembic",
     "httpx",
