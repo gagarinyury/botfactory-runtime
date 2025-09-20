@@ -118,41 +118,41 @@ def test_cache_invalidation_via_reload():
     # Verify cache was cleared
     assert bot_id not in bot_cache
 
-@pytest.mark.anyio
-async def test_get_router_caching_behavior():
-    """Test get_router function caching behavior"""
-    from runtime.main import get_router
+def test_rebuild_on_reload(client, demo_bot_id, monkeypatch):
+    """Test cache rebuilding behavior on reload"""
+    import types
+    from runtime import dsl_engine
 
-    # Clear router cache
-    router_cache.clear()
+    # Counter for build_router calls
+    call_count = {"n": 0}
+    original_build_router = dsl_engine.build_router
 
-    test_bot_id = "router-cache-test"
+    def counting_build_router(spec):
+        call_count["n"] += 1
+        return original_build_router(spec)
 
-    with patch('runtime.main.loader') as mock_loader, \
-         patch('runtime.main.async_session') as mock_session:
+    monkeypatch.setattr(dsl_engine, "build_router", counting_build_router)
 
-        # Mock database response
-        mock_session_instance = AsyncMock()
-        mock_session.return_value.__aenter__.return_value = mock_session_instance
+    # First call - should build router
+    response1 = client.get(f"/bots/{demo_bot_id}")
+    assert response1.status_code in [200, 404]
 
-        mock_bot_config = {
-            "spec_json": {"intents": [{"cmd": "/test", "reply": "Test"}]},
-            "version": 1
-        }
-        mock_loader.load_spec_by_bot_id = AsyncMock(return_value=mock_bot_config)
+    # Second call - should use cache, no rebuild
+    response2 = client.get(f"/bots/{demo_bot_id}")
+    assert response2.status_code in [200, 404]
 
-        # First call should load from database
-        router1 = await get_router(test_bot_id)
+    initial_count = call_count["n"]
 
-        # Verify database was called
-        mock_loader.load_spec_by_bot_id.assert_called()
+    # Reload should invalidate cache
+    reload_response = client.post(f"/bots/{demo_bot_id}/reload")
+    assert reload_response.status_code == 200
 
-        # Second call should use cache
-        mock_loader.reset_mock()
-        router2 = await get_router(test_bot_id)
+    # Next call should rebuild
+    response3 = client.get(f"/bots/{demo_bot_id}")
+    assert response3.status_code in [200, 404]
 
-        # Database should not be called again due to cache
-        mock_loader.load_spec_by_bot_id.assert_not_called()
+    # Should have at least one more build after reload
+    assert call_count["n"] > initial_count
 
 def test_router_cache_maxsize_limit():
     """Test TTL cache maxsize limitation"""

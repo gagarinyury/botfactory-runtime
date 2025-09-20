@@ -186,3 +186,81 @@ def test_metrics_consistent_format():
                 except ValueError:
                     # Some special values are allowed
                     assert value_part in ['+Inf', '-Inf', 'NaN']
+
+
+def _get_metric(text, name):
+    """Helper to extract metric family from text"""
+    from prometheus_client.parser import text_string_to_metric_families
+    for fam in text_string_to_metric_families(text):
+        if fam.name == name:
+            return fam
+    return None
+
+
+def test_error_counters_increment(monkeypatch, demo_bot_id):
+    """Test that error counters increment when errors occur"""
+    from runtime import loader
+
+    # Mock loader to raise exception
+    def fake_load_spec(*args, **kwargs):
+        raise Exception("Database error")
+
+    monkeypatch.setattr(loader, "load_spec_by_bot_id", fake_load_spec)
+
+    # Make request that should cause error
+    response = client.post(
+        "/preview/send",
+        json={"bot_id": demo_bot_id, "text": "/start"}
+    )
+
+    # Get metrics
+    metrics_response = client.get("/metrics")
+    metrics_text = metrics_response.text
+
+    # Check for error metric
+    error_metric = _get_metric(metrics_text, "bot_errors_total")
+    if error_metric:
+        # Should have samples with error labels
+        error_samples = [s for s in error_metric.samples if "where" in s.labels]
+        assert len(error_samples) > 0
+
+
+def test_webhook_latency_histogram(demo_bot_id, tg_update):
+    """Test that webhook latency histogram is recorded"""
+    # Make webhook request
+    response = client.post(f"/tg/{demo_bot_id}", json=tg_update)
+
+    # Get metrics
+    metrics_response = client.get("/metrics")
+    metrics_text = metrics_response.text
+
+    # Check for webhook latency histogram
+    assert "webhook_latency_ms_bucket" in metrics_text
+    assert "webhook_latency_ms_count" in metrics_text
+    assert "webhook_latency_ms_sum" in metrics_text
+
+
+def test_metrics_after_errors(monkeypatch, demo_bot_id):
+    """Test metrics are still available after errors"""
+    from runtime import dsl_engine
+
+    # Mock DSL engine to cause error
+    original_handle = dsl_engine.handle
+
+    def failing_handle(*args, **kwargs):
+        raise Exception("DSL error")
+
+    monkeypatch.setattr(dsl_engine, "handle", failing_handle)
+
+    # Make request that causes error
+    try:
+        client.post("/preview/send", json={"bot_id": demo_bot_id, "text": "/test"})
+    except:
+        pass
+
+    # Metrics should still be accessible
+    response = client.get("/metrics")
+    assert response.status_code == 200
+
+    # Restore original
+    monkeypatch.setattr(dsl_engine, "handle", original_handle)

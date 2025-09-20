@@ -139,3 +139,16 @@ def test_preview_send_long_text():
     assert response.status_code == 200
     data = response.json()
     assert "bot_reply" in data
+
+
+def test_unknown_command(demo_bot_id):
+    """Test preview with unknown command returns fallback"""
+    response = client.post(
+        "/preview/send",
+        json={"bot_id": demo_bot_id, "text": "/unknown"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "bot_reply" in data
+    assert data["bot_reply"].startswith("Не знаю")

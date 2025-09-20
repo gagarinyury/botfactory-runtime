@@ -21,6 +21,8 @@ async def test_create_bot():
 
     mock_result.fetchone.return_value = mock_bot
     mock_session.execute.return_value = mock_result
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
 
     # Test bot creation
     result = await registry.create_bot(mock_session, "test-bot", "test-token")
@@ -42,6 +44,7 @@ async def test_create_bot_error():
     # Mock session that raises exception
     mock_session = AsyncMock()
     mock_session.execute.side_effect = Exception("Database error")
+    mock_session.rollback = AsyncMock()
 
     # Test that exception is raised and rollback is called
     with pytest.raises(Exception, match="Database error"):
@@ -108,6 +111,8 @@ async def test_update_bot():
 
     mock_result.fetchone.return_value = mock_bot
     mock_session.execute.return_value = mock_result
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
 
     # Test updating bot
     result = await registry.update_bot(
@@ -149,9 +154,11 @@ async def test_delete_bot():
 
     # Mock database session
     mock_session = AsyncMock()
-    mock_result = AsyncMock()
+    mock_result = MagicMock()  # Changed from AsyncMock
     mock_result.rowcount = 1
     mock_session.execute.return_value = mock_result
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
 
     # Test deleting bot
     result = await registry.delete_bot(mock_session, "test-bot-id")
@@ -166,9 +173,11 @@ async def test_delete_bot_not_found():
 
     # Mock session with no affected rows
     mock_session = AsyncMock()
-    mock_result = AsyncMock()
+    mock_result = MagicMock()  # Changed from AsyncMock
     mock_result.rowcount = 0
     mock_session.execute.return_value = mock_result
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
 
     result = await registry.delete_bot(mock_session, "non-existent-id")
 
