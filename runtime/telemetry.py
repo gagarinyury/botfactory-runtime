@@ -8,6 +8,14 @@ lat = Histogram("dsl_handle_latency_ms", "DSL handle latency in milliseconds", b
 webhook_lat = Histogram("webhook_latency_ms", "Webhook latency in milliseconds", buckets=(0.01,0.05,0.1,0.2,0.5,1,2))
 errors = Counter("bot_errors_total", "Total bot errors", ["bot_id", "where", "code"])
 
+# New metrics for wizards and actions
+wizard_flows = Counter("wizard_flows_total", "Total wizard flows started", ["bot_id", "flow_cmd"])
+wizard_steps = Counter("wizard_steps_total", "Total wizard steps completed", ["bot_id", "flow_cmd"])
+wizard_completions = Counter("wizard_completions_total", "Total wizard completions", ["bot_id", "flow_cmd"])
+sql_actions = Counter("sql_actions_total", "Total SQL actions executed", ["bot_id", "action_type"])
+sql_action_latency = Histogram("sql_action_latency_ms", "SQL action latency in milliseconds", buckets=(0.1,0.5,1,2,5,10,20,50))
+template_renders = Counter("template_renders_total", "Total template renders", ["bot_id"])
+
 async def measure(bot_id, fn, *a, **kw):
     """Measure function execution time and record metrics"""
     t = perf_counter()

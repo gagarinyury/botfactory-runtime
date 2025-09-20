@@ -129,8 +129,48 @@ def handle_with_spec(spec: Dict[str, Any], text: str) -> str:
     return reply
 
 async def handle(bot_id: str, text: str) -> str:
-    """Handle incoming text for bot"""
+    """Handle incoming text for bot with wizard support"""
+    from .main import async_session
+    from .wizard_engine import wizard_engine
+    from .schemas import BotSpec, Flow
+
     spec = await load_spec(bot_id)
+
+    # Try to parse spec with new schema
+    try:
+        bot_spec = BotSpec(**spec)
+
+        # If spec has flows, try wizard handling first
+        if bot_spec.flows:
+            async with async_session() as session:
+                # Get user_id from request context (set by telegram handler)
+                from contextvars import ContextVar
+                _user_context: ContextVar[int] = ContextVar('user_id', default=None)
+                user_id = _user_context.get()
+
+                if user_id is None:
+                    logger.warning("no_user_context", bot_id=bot_id, text=text)
+                    # For testing/preview, use a default user_id
+                    user_id = 999999  # Clear test user ID
+
+                wizard_response = await wizard_engine.handle_wizard_message(
+                    bot_id, user_id, text, bot_spec.flows, session
+                )
+
+                if wizard_response is not None:
+                    return wizard_response
+
+        # Fall back to intent handling
+        if bot_spec.intents:
+            for intent in bot_spec.intents:
+                if intent.cmd == text:
+                    return intent.reply
+
+    except Exception as e:
+        # Fall back to legacy handling
+        pass
+
+    # Legacy handling
     return handle_with_spec(spec, text)
 
 def build_router(spec) -> Router:

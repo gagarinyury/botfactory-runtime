@@ -35,11 +35,16 @@ class ActionExecutor:
         sql = config["sql"]
         result_var = config["result_var"]
 
-        # Substitute parameters
-        sql_with_params = self._substitute_sql_parameters(sql)
+        # Set action type for security validation
+        self._set_action_type('sql_query')
 
+        # Validate SQL safety and build safe parameterized query
         try:
-            result = await self.session.execute(text(sql_with_params))
+            self._validate_sql_safety(sql)
+            params = self._build_safe_parameters()
+            stmt = text(sql)
+
+            result = await self.session.execute(stmt, params)
             rows = result.fetchall()
 
             # Convert to list of dicts
@@ -69,11 +74,16 @@ class ActionExecutor:
         """Execute SQL exec action"""
         sql = config["sql"]
 
-        # Substitute parameters
-        sql_with_params = self._substitute_sql_parameters(sql)
+        # Set action type for security validation
+        self._set_action_type('sql_exec')
 
+        # Validate SQL safety and build safe parameterized query
         try:
-            result = await self.session.execute(text(sql_with_params))
+            self._validate_sql_safety(sql)
+            params = self._build_safe_parameters()
+            stmt = text(sql)
+
+            result = await self.session.execute(stmt, params)
             await self.session.commit()
 
             logger.info("sql_exec_executed",
@@ -107,29 +117,61 @@ class ActionExecutor:
             "rendered_text": rendered_text
         }
 
-    def _substitute_sql_parameters(self, sql: str) -> str:
-        """Substitute SQL parameters with actual values"""
-        # Basic parameter substitution for :bot_id, :user_id, and context variables
+    def _build_safe_parameters(self) -> Dict[str, Any]:
+        """Build safe parameters for SQLAlchemy bound parameters"""
+        # Validate SQL action type
+        action_type = getattr(self, '_current_action_type', 'unknown')
+        if action_type not in ['sql_query', 'sql_exec']:
+            raise ValueError(f"Invalid action type: {action_type}")
+
+        # Build parameter dictionary for SQLAlchemy binding
         params = {
-            ":bot_id": f"'{self.bot_id}'",
-            ":user_id": str(self.user_id)
+            "bot_id": self.bot_id,
+            "user_id": int(self.user_id)
         }
 
-        # Add context variables
+        # Add context variables with type validation
         for var_name, var_value in self.context.items():
-            if isinstance(var_value, str):
-                params[f":{var_name}"] = f"'{var_value}'"
-            elif isinstance(var_value, (int, float)):
-                params[f":{var_name}"] = str(var_value)
+            if isinstance(var_value, (str, int, float, bool)):
+                params[var_name] = var_value
+            elif var_value is None:
+                params[var_name] = None
             else:
-                # For complex types, convert to JSON string
-                params[f":{var_name}"] = f"'{json.dumps(var_value)}'"
+                # For complex types, serialize to JSON
+                params[var_name] = json.dumps(var_value)
 
-        result_sql = sql
-        for param, value in params.items():
-            result_sql = result_sql.replace(param, value)
+        return params
 
-        return result_sql
+    def _validate_sql_safety(self, sql: str) -> None:
+        """Validate SQL statement for security"""
+        # Check for multiple statements
+        if ';' in sql.rstrip(';'):
+            raise ValueError("Multiple SQL statements not allowed for security")
+
+        sql_upper = sql.upper().strip()
+        action_type = getattr(self, '_current_action_type', 'unknown')
+
+        # Validate statement type based on action
+        if action_type == 'sql_query':
+            if not sql_upper.startswith('SELECT'):
+                raise ValueError("Only SELECT statements allowed for sql_query actions")
+        elif action_type == 'sql_exec':
+            if not (sql_upper.startswith('INSERT') or sql_upper.startswith('DELETE')):
+                raise ValueError("Only INSERT and DELETE statements allowed for sql_exec actions")
+
+        # Check for dangerous keywords (additional security layer)
+        dangerous_patterns = [
+            'DROP ', 'CREATE ', 'ALTER ', 'TRUNCATE ', 'GRANT ', 'REVOKE ',
+            'EXEC ', 'EXECUTE ', 'CALL ', 'LOAD_FILE', 'INTO OUTFILE'
+        ]
+
+        for pattern in dangerous_patterns:
+            if pattern in sql_upper:
+                raise ValueError(f"Dangerous SQL pattern detected: {pattern.strip()}")
+
+    def _set_action_type(self, action_type: str):
+        """Set current action type for security validation"""
+        self._current_action_type = action_type
 
     def _render_template(self, template: str, empty_text: Optional[str] = None) -> str:
         """Render template with context variables and each loops"""
