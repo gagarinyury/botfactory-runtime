@@ -19,6 +19,23 @@ async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False
 
 # Simple cache for invalidation demo
 bot_cache = {}
+router_cache = {}
+
+async def get_router(bot_id: str):
+    """Get cached router for bot_id, rebuild if not cached"""
+    if bot_id in router_cache:
+        return router_cache[bot_id]
+
+    # Load spec and build router
+    async with async_session() as session:
+        bot_config = await loader.load_spec_by_bot_id(session, bot_id)
+        if bot_config:
+            from .dsl_engine import build_router
+            router = build_router(bot_config["spec_json"])
+            router_cache[bot_id] = router
+            return router
+
+    return None
 
 @app.get("/health")
 def health(): return {"ok": True}
@@ -50,6 +67,8 @@ async def reload_bot(bot_id: str):
     """Invalidate cache for bot"""
     if bot_id in bot_cache:
         del bot_cache[bot_id]
+    if bot_id in router_cache:
+        del router_cache[bot_id]
 
     return {"bot_id": bot_id, "cache_invalidated": True, "message": "Bot cache cleared"}
 
@@ -68,4 +87,7 @@ async def preview_send(p: dict):
     return {"bot_reply": await measure(bot_id, handle, bot_id, text)}
 
 @app.post("/tg/{bot_id}")
-async def tg_webhook(bot_id: str, update: dict): return {"ok": True}
+async def tg_webhook(bot_id: str, update: dict):
+    router = await get_router(bot_id)   # пересобери при reload
+    # передай update в aiogram Dispatcher, связанный с router (минимальная обвязка)
+    return {"ok": True}

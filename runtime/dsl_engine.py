@@ -1,6 +1,7 @@
 from typing import Dict, Any, List
 from fastapi import APIRouter
 import json
+from aiogram import Router
 
 class DSLEngine:
     def __init__(self):
@@ -127,3 +128,16 @@ async def handle(bot_id: str, text: str) -> str:
     reply = next((i["reply"] for i in spec.get("intents", [])
                   if i.get("cmd") == text), "Не знаю эту команду")
     return reply
+
+def build_router(spec) -> Router:
+    """Build aiogram Router from spec_json"""
+    r = Router()
+    from aiogram.types import Message
+
+    for it in spec.get("intents", []):
+        if "cmd" in it:
+            @r.message(lambda m, cmd=it["cmd"]: m.text == cmd)
+            async def _(m: Message, reply=it["reply"]):
+                await m.answer(reply)
+
+    return r
