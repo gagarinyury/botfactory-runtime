@@ -20,7 +20,8 @@ dependencies = [
     "httpx",
     "prometheus-client",
     "pytest",
-    "pytest-asyncio"
+    "pytest-asyncio",
+    "structlog"
 ]
 
 [project.optional-dependencies]
