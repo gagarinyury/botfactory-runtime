@@ -1,0 +1,13 @@
+{
+  "success": true,
+  "final_state": "open",
+  "rejections": 3,
+  "stats": {
+    "state": "open",
+    "failure_count": 5,
+    "success_count": 0,
+    "last_failure_time": 1758445784.108392,
+    "half_open_attempts": 0
+  },
+  "errors": []
+}

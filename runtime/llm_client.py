@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from time import perf_counter
 import structlog
 import json
+from .circuit_breaker import with_circuit_breaker, CircuitBreakerError
 from pydantic import BaseModel, ValidationError
 
 logger = structlog.get_logger()
@@ -48,6 +49,24 @@ class LLMClient:
         self.config.model = os.getenv("LLM_MODEL", self.config.model)
         self.config.enabled = os.getenv("LLM_ENABLED", "true").lower() == "true"
         self.config.timeout = int(os.getenv("LLM_TIMEOUT", str(self.config.timeout)))
+
+    async def _with_circuit_breaker(self, bot_id: str, coro):
+        """Wrapper to apply circuit breaker to LLM calls"""
+        try:
+            return await with_circuit_breaker(bot_id, coro)
+        except CircuitBreakerError as e:
+            logger.warning("llm_circuit_breaker_open",
+                         bot_id=bot_id,
+                         state=e.state.value)
+            # Return fallback response
+            return LLMResponse(
+                content="⚠️ Service temporarily unavailable. Please try again later.",
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                model=self.config.model,
+                duration_ms=0,
+                cached=False,
+                error="circuit_breaker_open"
+            )
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session"""

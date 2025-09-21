@@ -63,6 +63,48 @@ async def health_db():
     except Exception:
         return Response(content='{"db_ok": false}', status_code=503, media_type="application/json")
 
+@app.get("/health/pg")
+async def health_pg():
+    """PostgreSQL health check"""
+    from fastapi import Response
+    try:
+        async with async_session() as session:
+            db_status = await registry.db_ok(session)
+            if not db_status:
+                return Response(content='{"pg_ok": false}', status_code=503, media_type="application/json")
+            return {"pg_ok": True}
+    except Exception:
+        return Response(content='{"pg_ok": false}', status_code=503, media_type="application/json")
+
+@app.get("/health/redis")
+async def health_redis():
+    """Redis health check"""
+    from fastapi import Response
+    from .redis_client import redis_client
+    try:
+        if not redis_client.redis:
+            await redis_client.connect()
+        await redis_client.redis.ping()
+        return {"redis_ok": True}
+    except Exception:
+        return Response(content='{"redis_ok": false}', status_code=503, media_type="application/json")
+
+@app.get("/health/llm")
+async def health_llm():
+    """LLM service health check"""
+    from fastapi import Response
+    from .llm_client import LLMClient
+    try:
+        # Test basic LLM connectivity
+        llm_client = LLMClient()
+        is_healthy = await llm_client.health_check()
+        if is_healthy:
+            return {"llm_ok": True}
+        else:
+            return Response(content='{"llm_ok": false}', status_code=503, media_type="application/json")
+    except Exception:
+        return Response(content='{"llm_ok": false}', status_code=503, media_type="application/json")
+
 @app.get("/bots/{bot_id}")
 async def get_bot_spec(bot_id: str):
     """Get bot spec_json by ID"""

@@ -626,15 +626,18 @@ class ActionExecutor:
             # Get prompt configuration with style
             prompt_config = BotPromptConfigs.improve_bot_message(text, llm_style)
 
-            # Call LLM with caching enabled
-            response = await llm_client.complete(
-                system=prompt_config["system"],
-                user=prompt_config["user"],
-                temperature=prompt_config["temperature"],
-                max_tokens=min(max_tokens, prompt_config.get("max_tokens", 200)),
-                use_cache=True,
-                bot_id=self.bot_id,
-                user_id=self.user_id
+            # Call LLM with caching enabled and circuit breaker protection
+            response = await llm_client._with_circuit_breaker(
+                self.bot_id,
+                llm_client.complete(
+                    system=prompt_config["system"],
+                    user=prompt_config["user"],
+                    temperature=prompt_config["temperature"],
+                    max_tokens=min(max_tokens, prompt_config.get("max_tokens", 200)),
+                    use_cache=True,
+                    bot_id=self.bot_id,
+                    user_id=self.user_id
+                )
             )
 
             improved_text = response.content.strip()

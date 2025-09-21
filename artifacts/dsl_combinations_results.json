@@ -1,0 +1,27 @@
+{
+  "menu_test": {
+    "success": false,
+    "response": null,
+    "error": "Unexpected response: Не знаю эту команду"
+  },
+  "wizard_test": {
+    "success": false,
+    "steps": [],
+    "completed": false,
+    "error": null
+  },
+  "sql_exec_test": {
+    "success": false,
+    "db_record": null,
+    "error": null
+  },
+  "reply_template_test": {
+    "success": false,
+    "i18n_used": false,
+    "error": null
+  },
+  "overall_flow": {
+    "success": false,
+    "stages_completed": 0
+  }
+}

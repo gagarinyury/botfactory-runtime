@@ -1,0 +1,35 @@
+{
+  "reload_endpoint": {
+    "success": true,
+    "response": {
+      "bot_id": "cache-test-bot",
+      "cache_invalidated": true,
+      "message": "Bot cache cleared"
+    }
+  },
+  "cache_invalidation": {
+    "success": true,
+    "message": "Bot cache cleared"
+  },
+  "i18n_endpoint": {
+    "success": true,
+    "response": {
+      "bot_id": "cache-test-bot",
+      "locale": "ru",
+      "keys": {},
+      "keys_count": 0
+    }
+  },
+  "metrics_updated": {
+    "success": true,
+    "details": [
+      "i18n_cache_misses_total{bot_id=\"test-i18n-bot\",locale=\"ru\"} 1.0",
+      "i18n_cache_misses_total{bot_id=\"cache-test-bot\",locale=\"ru\"} 1.0",
+      "i18n_cache_misses_created{bot_id=\"test-i18n-bot\",locale=\"ru\"} 1.758447043481942e+09",
+      "i18n_cache_misses_created{bot_id=\"cache-test-bot\",locale=\"ru\"} 1.7584470759413319e+09"
+    ]
+  },
+  "tests_passed": 4,
+  "total_tests": 4,
+  "overall_success": true
+}

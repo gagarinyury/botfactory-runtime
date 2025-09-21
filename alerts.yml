@@ -1,0 +1,167 @@
+# Prometheus Alert Rules for BotFactory Runtime
+# Usage: Add to prometheus.yml rules section
+
+groups:
+  - name: botfactory_critical
+    interval: 30s
+    rules:
+      - alert: BotErrorRateHigh
+        expr: rate(bot_errors_total[5m]) > 0.01
+        for: 2m
+        labels:
+          severity: critical
+          service: botfactory-runtime
+        annotations:
+          summary: "High error rate for bot {{ $labels.bot_id }}"
+          description: "Bot {{ $labels.bot_id }} has error rate {{ $value | humanizePercentage }} over last 5 minutes"
+          runbook_url: "https://docs.botfactory.com/runbooks/high-error-rate"
+
+      - alert: DSLHandlingLatencyHigh
+        expr: histogram_quantile(0.95, rate(dsl_handle_latency_ms_bucket[5m])) > 300
+        for: 3m
+        labels:
+          severity: warning
+          service: botfactory-runtime
+        annotations:
+          summary: "High DSL handling latency"
+          description: "DSL handling p95 latency is {{ $value }}ms, above 300ms threshold"
+          runbook_url: "https://docs.botfactory.com/runbooks/high-latency"
+
+      - alert: LLMTimeoutRateHigh
+        expr: rate(llm_timeout_total[5m]) > 0.03
+        for: 2m
+        labels:
+          severity: critical
+          service: botfactory-runtime
+        annotations:
+          summary: "High LLM timeout rate for bot {{ $labels.bot_id }}"
+          description: "Bot {{ $labels.bot_id }} has LLM timeout rate {{ $value | humanizePercentage }} (>3%)"
+          runbook_url: "https://docs.botfactory.com/runbooks/llm-timeouts"
+
+      - alert: CircuitBreakerOpen
+        expr: circuit_breaker_state_changes_total{to_state="open"} > 0
+        for: 0s
+        labels:
+          severity: critical
+          service: botfactory-runtime
+        annotations:
+          summary: "Circuit breaker opened for bot {{ $labels.bot_id }}"
+          description: "Circuit breaker has opened for bot {{ $labels.bot_id }}, blocking LLM requests"
+          runbook_url: "https://docs.botfactory.com/runbooks/circuit-breaker"
+
+      - alert: LLMLatencyHigh
+        expr: histogram_quantile(0.95, rate(llm_latency_ms_bucket[5m])) > 1500
+        for: 3m
+        labels:
+          severity: warning
+          service: botfactory-runtime
+        annotations:
+          summary: "High LLM response latency"
+          description: "LLM p95 latency is {{ $value }}ms, above 1.5s threshold"
+          runbook_url: "https://docs.botfactory.com/runbooks/llm-latency"
+
+  - name: botfactory_infrastructure
+    interval: 60s
+    rules:
+      - alert: PostgreSQLDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: botfactory-infrastructure
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL database is not responding"
+          runbook_url: "https://docs.botfactory.com/runbooks/postgres-down"
+
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: botfactory-infrastructure
+        annotations:
+          summary: "Redis is down"
+          description: "Redis cache is not responding"
+          runbook_url: "https://docs.botfactory.com/runbooks/redis-down"
+
+      - alert: LLMServiceDown
+        expr: up{job="llm"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: botfactory-infrastructure
+        annotations:
+          summary: "LLM service is down"
+          description: "LLM service is not responding"
+          runbook_url: "https://docs.botfactory.com/runbooks/llm-down"
+
+  - name: botfactory_performance
+    interval: 60s
+    rules:
+      - alert: HighMemoryUsage
+        expr: process_resident_memory_bytes / (1024 * 1024 * 1024) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: botfactory-runtime
+        annotations:
+          summary: "High memory usage"
+          description: "Runtime using {{ $value }}GB memory (>2GB threshold)"
+          runbook_url: "https://docs.botfactory.com/runbooks/memory-usage"
+
+      - alert: BroadcastStuck
+        expr: broadcast_duration_seconds{quantile="0.95"} > 1800
+        for: 5m
+        labels:
+          severity: warning
+          service: botfactory-runtime
+        annotations:
+          summary: "Broadcast taking too long"
+          description: "Broadcast for bot {{ $labels.bot_id }} has been running for {{ $value }}s (>30min)"
+          runbook_url: "https://docs.botfactory.com/runbooks/broadcast-stuck"
+
+  - name: botfactory_business
+    interval: 300s
+    rules:
+      - alert: LowCacheHitRate
+        expr: rate(llm_cache_hits_total[15m]) / rate(llm_requests_total[15m]) < 0.30
+        for: 10m
+        labels:
+          severity: warning
+          service: botfactory-runtime
+        annotations:
+          summary: "Low LLM cache hit rate"
+          description: "LLM cache hit rate is {{ $value | humanizePercentage }} (<30%)"
+          runbook_url: "https://docs.botfactory.com/runbooks/cache-hit-rate"
+
+      - alert: HighBudgetUsage
+        expr: rate(llm_budget_usage_total[1h]) > 10000
+        for: 15m
+        labels:
+          severity: warning
+          service: botfactory-runtime
+        annotations:
+          summary: "High LLM budget usage for bot {{ $labels.bot_id }}"
+          description: "Bot {{ $labels.bot_id }} using {{ $value }} tokens/hour"
+          runbook_url: "https://docs.botfactory.com/runbooks/high-budget"
+
+# Recovery criteria for chaos testing
+  - name: botfactory_chaos_recovery
+    interval: 30s
+    rules:
+      - alert: ChaosRecoveryFailed
+        expr: |
+          (
+            rate(bot_errors_total[5m]) > 0.05 or
+            histogram_quantile(0.95, rate(dsl_handle_latency_ms_bucket[5m])) > 500 or
+            rate(llm_timeout_total[5m]) > 0.10
+          ) and on() up{job="chaos_test"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          service: botfactory-chaos
+        annotations:
+          summary: "System failed to recover from chaos test"
+          description: "Metrics not returning to baseline after 5 minutes"
+          runbook_url: "https://docs.botfactory.com/runbooks/chaos-recovery"

@@ -64,6 +64,12 @@ i18n_cache_misses_total = Counter("i18n_cache_misses_total", "Total i18n cache m
 policy_ratelimit_hits_total = Counter("policy_ratelimit_hits_total", "Total rate limit hits", ["bot_id", "scope"])
 policy_ratelimit_pass_total = Counter("policy_ratelimit_pass_total", "Total rate limit passes", ["bot_id", "scope"])
 
+# Circuit breaker metrics
+circuit_breaker_state_changes_total = Counter("circuit_breaker_state_changes_total", "Circuit breaker state changes", ["bot_id", "from_state", "to_state"])
+circuit_breaker_open_duration_seconds = Histogram("circuit_breaker_open_duration_seconds", "Duration circuit breaker was open", ["bot_id"], buckets=(1, 5, 10, 30, 60, 300, 600))
+llm_timeout_total = Counter("llm_timeout_total", "Total LLM timeouts", ["bot_id"])
+llm_circuit_breaker_rejections_total = Counter("llm_circuit_breaker_rejections_total", "Total requests rejected by circuit breaker", ["bot_id"])
+
 async def measure(bot_id, fn, *a, **kw):
     """Measure function execution time and record metrics"""
     t = perf_counter()

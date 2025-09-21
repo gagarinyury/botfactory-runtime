@@ -1,7 +1,7 @@
 """Redis client for wizard state management"""
 import os
 import json
-import aioredis
+import redis.asyncio as redis
 from typing import Dict, Any, Optional
 import structlog
 
@@ -15,7 +15,7 @@ class RedisClient:
     async def connect(self):
         """Connect to Redis"""
         try:
-            self.redis = aioredis.from_url(self.redis_url, decode_responses=True)
+            self.redis = redis.from_url(self.redis_url, decode_responses=True)
             # Test connection
             await self.redis.ping()
             logger.info("redis_connected", redis_url=self.redis_url)

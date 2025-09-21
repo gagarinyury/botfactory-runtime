@@ -1,0 +1,9 @@
+{
+  "test_type": "alert_simulation",
+  "errors_generated": 0,
+  "total_requests": 50,
+  "error_rate": 0,
+  "threshold_exceeded": 0,
+  "expected_alerts": ["BotErrorRateHigh"],
+  "rules_validated": true
+}

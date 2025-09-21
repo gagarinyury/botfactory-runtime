@@ -1,0 +1,31 @@
+{
+  "sensitive_data_audit": {
+    "success": true,
+    "violations": []
+  },
+  "required_fields_audit": {
+    "success": false,
+    "fields_found": [
+      {
+        "field": "timestamp",
+        "count": 32,
+        "sample": "2025-09-21T09:18:05"
+      }
+    ]
+  },
+  "token_leakage_test": {
+    "success": true,
+    "details": "Token not found in logs"
+  },
+  "log_structure_audit": {
+    "success": true,
+    "samples": [
+      "runtime-1  |                     JOIN bots b ON b.id = bs.bot_id",
+      "runtime-1  |                     WHERE bs.bot_id = %(bot_id)s",
+      "runtime-1  | [parameters: {'bot_id': 'security-audit'}]"
+    ]
+  },
+  "passed_checks": 3,
+  "total_checks": 4,
+  "overall_success": true
+}

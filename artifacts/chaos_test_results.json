@@ -1,0 +1,8 @@
+{
+  "chaos_test": "postgresql",
+  "outage_detected": true,
+  "recovery_successful": true,
+  "recovery_duration_seconds": 0,
+  "total_duration_seconds": 61,
+  "criterion_met": true
+}
