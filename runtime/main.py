@@ -412,10 +412,11 @@ async def tg_webhook(bot_id: str, update: dict):
 
             # Inject bot_id into the update object for handlers to use
             aiogram_update = Update.model_validate(update)
-            if aiogram_update.message:
-                setattr(aiogram_update.message, 'bot_id', bot_id)
-            elif aiogram_update.callback_query:
-                setattr(aiogram_update.callback_query.message, 'bot_id', bot_id)
+
+            # Store bot_id globally for handlers to access
+            # This is a simpler approach that avoids modifying frozen objects
+            import builtins
+            builtins._current_bot_id = bot_id
 
             await dp.feed_update(bot, aiogram_update)
             return {"ok": True}
@@ -430,7 +431,7 @@ async def tg_webhook(bot_id: str, update: dict):
     except HTTPException:
         raise
     except Exception as e:
-        errors.labels(bot_id).inc()
+        errors.labels(bot_id, "webhook", "500").inc()
         log.error("webhook_error", bot_id=bot_id, trace_id=tid, error=str(e), exc_info=True)
         if "db" in str(e).lower() or "database" in str(e).lower():
             fail(503, "db_unavailable", "Database connection failed")

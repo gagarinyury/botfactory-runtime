@@ -122,7 +122,8 @@ def register_wizard_flows(router: Router, spec: dict):
         if flow_type == "flow.wizard.v1":
             @router.message(Command(commands=[cmd_name]))
             async def wizard_start_handler(message: Message, s=spec, c=command):
-                bot_id = getattr(message, 'bot_id', 'unknown')
+                import builtins
+                bot_id = getattr(builtins, '_current_bot_id', 'unknown')
                 user_id = message.from_user.id
                 flow_def = find_flow_by_cmd(s, c)
                 if flow_def:
@@ -132,7 +133,8 @@ def register_wizard_flows(router: Router, spec: dict):
         elif flow_type == "flow.generic.v1":
             @router.message(Command(commands=[cmd_name]))
             async def generic_flow_handler(message: Message, s=spec, c=command):
-                bot_id = getattr(message, 'bot_id', 'unknown')
+                import builtins
+                bot_id = getattr(builtins, '_current_bot_id', 'unknown')
                 user_id = message.from_user.id
                 flow_def = find_flow_by_cmd(s, c)
                 if flow_def:
@@ -145,7 +147,19 @@ def register_wizard_flows(router: Router, spec: dict):
 
     @router.message(Command(commands=["cancel"]))
     async def cancel_handler(message: Message):
-        bot_id = getattr(message, 'bot_id', 'unknown')
+        import builtins
+        bot_id = getattr(builtins, '_current_bot_id', 'unknown')
         user_id = message.from_user.id
         reply_text = await cancel_wizard(bot_id, user_id)
         await message.answer(reply_text)
+
+# Legacy compatibility - создаем объект wizard_engine для обратной совместимости
+class WizardEngine:
+    """Legacy compatibility wrapper for wizard engine functions"""
+
+    async def handle_calendar_callback(self, bot_id: str, user_id: int, callback_data: str, session):
+        """Handle calendar callback - placeholder for now"""
+        return None
+
+# Создаем экземпляр для импорта
+wizard_engine = WizardEngine()

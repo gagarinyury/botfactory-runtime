@@ -34,3 +34,11 @@ def register_menu_flows(router: Router, spec: dict):
                 async def menu_handler(message: Message, f=flow):
                     menu_data = build_menu_message(f.get("params", {}))
                     await message.answer(text=menu_data["text"], reply_markup=menu_data["reply_markup"])
+
+# Legacy compatibility - создаем объект menu_engine для обратной совместимости
+class MenuEngine:
+    """Legacy compatibility wrapper for menu engine functions"""
+    pass
+
+# Создаем экземпляр для импорта
+menu_engine = MenuEngine()

@@ -1,4 +1,6 @@
 from prometheus_client import Counter, Histogram, generate_latest, Gauge
+from time import perf_counter
+from fastapi import HTTPException
 
 # Management API metrics
 api_requests_total = Counter("api_requests_total", "Total management API requests", ["route", "code"])
@@ -17,6 +19,7 @@ wizard_active_total = Gauge("wizard_active_total", "Total active wizards", ["bot
 wizard_errors_total = Counter("wizard_errors_total", "Total wizard errors", ["bot_id", "flow_cmd"])
 wizard_flows = Counter("wizard_flows_total", "Total wizard flows started", ["bot_id", "flow_cmd"])
 wizard_steps = Counter("wizard_steps_total", "Total wizard steps completed", ["bot_id", "flow_cmd"])
+wizard_steps_total = wizard_steps
 wizard_completions = Counter("wizard_completions_total", "Total wizard completions", ["bot_id", "flow_cmd"])
 sql_actions = Counter("sql_actions_total", "Total SQL actions executed", ["bot_id", "action_type"])
 bot_sql_exec_total = Counter("bot_sql_exec_total", "Total SQL exec actions", ["bot_id"])
