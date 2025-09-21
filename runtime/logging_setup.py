@@ -1,5 +1,6 @@
 import logging
 import structlog
+import uuid
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 structlog.configure(
@@ -108,3 +109,8 @@ def mask_user_input_in_logs(data):
                 masked[k] = v
         return masked
     return data
+
+
+def with_trace(ctx=None):
+    """Generate trace ID for request tracking"""
+    return (ctx or str(uuid.uuid4()))

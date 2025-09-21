@@ -6,7 +6,7 @@ from .registry import BotRegistry
 from .loader import BotLoader
 from .dsl_engine import DSLEngine
 from prometheus_client import generate_latest
-from .logging_setup import log, bind_ctx, mask_sensitive_data, mask_user_input_in_logs, mask_user_text  # импорт даёт конфиг
+from .logging_setup import log, bind_ctx, mask_sensitive_data, mask_user_input_in_logs, mask_user_text, with_trace  # импорт даёт конфиг
 from .schemas import PreviewRequest, BotReplyResponse, BroadcastRequest, BroadcastResponse
 
 app = FastAPI()
@@ -311,7 +311,6 @@ async def preview_send(p: PreviewRequest):
     text = p.text
     from .dsl_engine import handle
     from .telemetry import measured_preview
-    from .logging import with_trace
     from .http_errors import fail
 
     tid = with_trace()
@@ -335,7 +334,6 @@ async def preview_send(p: PreviewRequest):
 @app.post("/tg/{bot_id}")
 async def tg_webhook(bot_id: str, update: dict):
     from .telemetry import measured_webhook
-    from .logging import with_trace
     from .http_errors import fail
 
     async def process_update(bot_id: str, update: dict):
