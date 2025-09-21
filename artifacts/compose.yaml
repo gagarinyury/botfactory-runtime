@@ -1,0 +1,66 @@
+name: botfactory-runtime
+services:
+  pg:
+    environment:
+      POSTGRES_DB: botfactory
+      POSTGRES_PASSWORD: dev
+      POSTGRES_USER: dev
+    image: postgres:16
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        target: 5432
+        published: "5433"
+        protocol: tcp
+    volumes:
+      - type: volume
+        source: pgdata
+        target: /var/lib/postgresql/data
+        volume: {}
+      - type: bind
+        source: /opt/botfactory-runtime/migrations
+        target: /docker-entrypoint-initdb.d
+        read_only: true
+        bind:
+          create_host_path: true
+  redis:
+    image: redis:7
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        target: 6379
+        published: "6380"
+        protocol: tcp
+  runtime:
+    build:
+      context: /opt/botfactory-runtime
+      dockerfile: docker/Dockerfile
+    depends_on:
+      pg:
+        condition: service_started
+        required: true
+      redis:
+        condition: service_started
+        required: true
+    environment:
+      DATABASE_URL: postgresql+psycopg://dev:dev@pg:5432/botfactory
+      INSIDE_CONTAINER: "1"
+      PG_PORT: "5433"
+      REDIS_PORT: "6380"
+      REDIS_URL: redis://redis:6379/0
+      TELEGRAM_DOMAIN: https://profy.top
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8000"
+        protocol: tcp
+networks:
+  default:
+    name: botfactory-runtime_default
+volumes:
+  pgdata:
+    name: botfactory-runtime_pgdata

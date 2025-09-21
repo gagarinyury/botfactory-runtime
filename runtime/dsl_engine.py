@@ -1,5 +1,5 @@
 from typing import Dict, Any, List
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 import json
 from aiogram import Router
 import structlog
@@ -243,6 +243,8 @@ def build_router(spec) -> Router:
     r = Router()
     from aiogram.types import Message
     from aiogram.filters import Command
+    from .menu_engine import register_menu_flows
+    from .wizard_engine import register_wizard_flows
 
     def add_cmd(cmd: str, reply: str):
         cmd_name = cmd.lstrip('/')
@@ -253,5 +255,8 @@ def build_router(spec) -> Router:
     for it in spec.get("intents", []):
         if "cmd" in it:
             add_cmd(it["cmd"], it.get("reply", ""))
+    
+    register_menu_flows(r, spec)
+    register_wizard_flows(r, spec)
 
     return r

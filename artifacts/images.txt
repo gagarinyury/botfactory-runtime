@@ -1,0 +1,4 @@
+CONTAINER                      REPOSITORY                   TAG                 PLATFORM            IMAGE ID            SIZE                CREATED
+botfactory-runtime-pg-1        postgres                     16                  linux/amd64         8216e24fab1e        451MB               292 years ago
+botfactory-runtime-redis-1     redis                        7                   linux/amd64         c2323c838e5a        117MB               292 years ago
+botfactory-runtime-runtime-1   botfactory-runtime-runtime   latest              linux/amd64         e5a54493ac37        407MB               6 minutes ago

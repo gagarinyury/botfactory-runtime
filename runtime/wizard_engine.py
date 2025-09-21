@@ -1,586 +1,151 @@
-"""Wizard state machine engine"""
+from aiogram import Router
+from aiogram.filters import Command
+from aiogram.types import Message, InlineKeyboardMarkup
+from fastapi import HTTPException
+from typing import Dict, Any, Optional
 import re
-from typing import Dict, Any, Optional, List
+import json
 from .redis_client import redis_client
 from .actions import ActionExecutor
-from .schemas import Flow, FlowStep, WizardFlow, WizardStep
-from .events_logger import create_events_logger
-from .telemetry import wizard_flows, wizard_steps, wizard_completions
-import structlog
+from .main import async_session # For DB access
+from .telemetry import wizard_active_total, wizard_steps_total, wizard_errors_total
 
-logger = structlog.get_logger()
+# --- State Management ---
 
-class WizardEngine:
-    def __init__(self):
-        pass
+async def get_wizard_state(bot_id: str, user_id: int) -> Optional[Dict[str, Any]]:
+    return await redis_client.get_wizard_state(bot_id, user_id)
 
-    async def handle_wizard_message(self, bot_id: str, user_id: int, text: str, flows: List[Flow], session) -> str:
-        """Handle incoming message in wizard context"""
+async def set_wizard_state(bot_id: str, user_id: int, state: Dict[str, Any]):
+    await redis_client.set_wizard_state(bot_id, user_id, state)
 
-        # Check if this is an entry command for any flow
-        for flow in flows:
-            if text == flow.entry_cmd:
-                return await self._start_wizard(bot_id, user_id, flow, session)
+async def delete_wizard_state(bot_id: str, user_id: int):
+    await redis_client.delete_wizard_state(bot_id, user_id)
 
-        # Check if user is in active wizard session
-        wizard_state = await redis_client.get_wizard_state(bot_id, user_id)
-        if wizard_state:
-            return await self._continue_wizard(bot_id, user_id, text, wizard_state, session)
+# --- Flow Logic ---
 
-        # No wizard active, return None to let other handlers process
+async def start_wizard(bot_id: str, user_id: int, flow: Dict[str, Any]) -> str:
+    wizard_active_total.labels(bot_id).inc()
+    initial_state = {
+        "flow_id": flow["entry_cmd"],
+        "step_index": 0,
+        "vars": {}
+    }
+    await set_wizard_state(bot_id, user_id, initial_state)
+    first_step = flow["params"]["steps"][0]
+    return first_step["ask"]
+
+async def handle_step(bot_id: str, user_id: int, text: str, spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    state = await get_wizard_state(bot_id, user_id)
+    if not state:
         return None
 
-    async def _start_wizard(self, bot_id: str, user_id: int, flow: Flow, session) -> str:
-        """Start a new wizard flow"""
-        logger.info("wizard_started", bot_id=bot_id, user_id=user_id, entry_cmd=flow.entry_cmd)
-
-        # Create events logger
-        events_logger = create_events_logger(session, bot_id, user_id)
-        await events_logger.log_update(flow.entry_cmd)
-
-        # Update metrics
-        wizard_flows.labels(bot_id, flow.entry_cmd).inc()
-
-        # Initialize wizard state
-        state = {
-            "flow": flow.dict(),
-            "step": 0,
-            "vars": {},
-            "started_at": structlog.get_context().get("timestamp")
-        }
-
-        # Execute on_enter actions if any
-        if flow.on_enter:
-            action_executor = ActionExecutor(session, bot_id, user_id)
-            for action_def in flow.on_enter:
-                result = await action_executor.execute_action(action_def)
-                if not result.get("success", False):
-                    logger.error("wizard_on_enter_failed", result=result)
-                    await events_logger.log_error("wizard_on_enter", str(result))
-                    return "Произошла ошибка при запуске."
-
-                # Check if action was blocked by rate limit
-                if result.get("blocked", False):
-                    await redis_client.delete_wizard_state(bot_id, user_id)
-                    return result.get("text", "Действие заблокировано")
-
-                # If this is a reply template action, return immediately
-                if result.get("type") == "reply":
-                    await redis_client.delete_wizard_state(bot_id, user_id)
-                    await events_logger.log_action_reply(
-                        result.get("template_length", 0),
-                        len(result["text"]),
-                        result.get("llm_decision")  # Pass LLM decision for result tagging
-                    )
-                    # Return structured response for keyboard handling
-                    return self._format_response(result)
-
-        # If flow has steps, start with first step
-        if flow.steps and len(flow.steps) > 0:
-            await redis_client.set_wizard_state(bot_id, user_id, state)
-            return flow.steps[0].ask
-
-        # Flow has no steps, just on_enter actions (like /my or /cancel)
-        await redis_client.delete_wizard_state(bot_id, user_id)
-        return "Готово."
-
-    async def _continue_wizard(self, bot_id: str, user_id: int, text: str, state: Dict[str, Any], session) -> str:
-        """Continue existing wizard flow"""
-        flow_data = state["flow"]
-        current_step = state["step"]
-        vars_data = state["vars"]
-
-        flow = Flow(**flow_data)
-
-        if not flow.steps or current_step >= len(flow.steps):
-            # Should not happen, but clean up state
-            await redis_client.delete_wizard_state(bot_id, user_id)
-            return "Визард завершён."
-
-        step = flow.steps[current_step]
-
-        # Validate input if validation is configured
-        if step.validate:
-            if not re.match(step.validate.regex, text):
-                logger.info("wizard_validation_failed",
-                           bot_id=bot_id, user_id=user_id,
-                           step=current_step, input=text)
-                return step.validate.msg
-
-        # Store validated input
-        vars_data[step.var] = text
-
-        logger.info("wizard_step_completed",
-                   bot_id=bot_id, user_id=user_id,
-                   step=current_step, var=step.var)
-
-        # Execute on_step actions if any
-        if flow.on_step:
-            action_executor = ActionExecutor(session, bot_id, user_id)
-            # Set current context
-            for var_name, var_value in vars_data.items():
-                action_executor.set_context_var(var_name, var_value)
-
-            for action_def in flow.on_step:
-                result = await action_executor.execute_action(action_def)
-                if not result.get("success", False):
-                    logger.error("wizard_on_step_failed", result=result)
-
-                # Check if action was blocked by rate limit
-                if result.get("blocked", False):
-                    return result.get("text", "Действие заблокировано")
-
-        # Move to next step
-        next_step = current_step + 1
-
-        if next_step >= len(flow.steps):
-            # All steps completed, execute on_complete actions
-            return await self._complete_wizard(bot_id, user_id, flow, vars_data, session)
-        else:
-            # Update state and ask next question
-            state["step"] = next_step
-            state["vars"] = vars_data
-            await redis_client.set_wizard_state(bot_id, user_id, state)
-            return flow.steps[next_step].ask
-
-    async def _complete_wizard(self, bot_id: str, user_id: int, flow: Flow, vars_data: Dict[str, Any], session) -> str:
-        """Complete wizard flow"""
-        logger.info("wizard_completed", bot_id=bot_id, user_id=user_id, vars=vars_data)
-
-        # Clean up wizard state
-        await redis_client.delete_wizard_state(bot_id, user_id)
-
-        # Execute on_complete actions
-        if flow.on_complete:
-            action_executor = ActionExecutor(session, bot_id, user_id)
-
-            # Set all collected variables in context
-            for var_name, var_value in vars_data.items():
-                action_executor.set_context_var(var_name, var_value)
-
-            final_response = "Готово."
-
-            for action_def in flow.on_complete:
-                result = await action_executor.execute_action(action_def)
-                if not result.get("success", False):
-                    logger.error("wizard_on_complete_failed", result=result)
-                    return "Произошла ошибка при завершении."
-
-                # Check if action was blocked by rate limit
-                if result.get("blocked", False):
-                    return result.get("text", "Действие заблокировано")
-
-                # If this is a reply template action, use its response as final response
-                if result.get("type") == "reply":
-                    final_response = self._format_response(result)
-
-            return final_response
-
-        return "Визард завершён."
-
-    def _format_response(self, result: Dict[str, Any]) -> Any:
-        """Format action response for return"""
-        # For now, return just the text to maintain compatibility
-        # In the future, this could return structured data for keyboard handling
-        if "keyboard" in result:
-            # TODO: Implement keyboard handling in DSL engine
-            # For now, just return text
-            return result["text"]
-        else:
-            return result["text"]
-
-    async def handle_wizard_v1_message(self, bot_id: str, user_id: int, text: str, wizard_flows: List[WizardFlow], session) -> Optional[str]:
-        """Handle incoming message for flow.wizard.v1 format"""
-
-        # Check if this is an entry command for any wizard flow
-        for wizard_flow in wizard_flows:
-            if text == wizard_flow.entry_cmd:
-                return await self._start_wizard_v1(bot_id, user_id, wizard_flow, session)
-
-        # Check if user is in active wizard session (any format)
-        wizard_state = await redis_client.get_wizard_state(bot_id, user_id)
-        if wizard_state and wizard_state.get("format") == "v1":
-            return await self._continue_wizard_v1(bot_id, user_id, text, wizard_state, session)
-
-        return None
-
-    async def _start_wizard_v1(self, bot_id: str, user_id: int, wizard_flow: WizardFlow, session) -> str:
-        """Start a new v1 wizard flow"""
-        logger.info("wizard_v1_started", bot_id=bot_id, user_id=user_id, entry_cmd=wizard_flow.entry_cmd)
-
-        # Create events logger
-        events_logger = create_events_logger(session, bot_id, user_id)
-        await events_logger.log_update(wizard_flow.entry_cmd)
-
-        # Update metrics
-        wizard_flows.labels(bot_id, wizard_flow.entry_cmd).inc()
-
-        params = wizard_flow.params
-        steps = params.get("steps", [])
-        ttl_sec = params.get("ttl_sec", 86400)
-
-        # Initialize wizard state
-        state = {
-            "format": "v1",
-            "wizard_flow": wizard_flow.dict(),
-            "step": 0,
-            "vars": {},
-            "started_at": __import__('time').time(),
-            "ttl_sec": ttl_sec
-        }
-
-        # Execute on_enter actions if any
-        on_enter = params.get("on_enter", [])
-        if on_enter:
-            action_executor = ActionExecutor(session, bot_id, user_id)
-            for action_def in on_enter:
-                result = await self._execute_v1_action(action_executor, action_def)
-                if not result.get("success", False):
-                    logger.error("wizard_v1_on_enter_failed", result=result)
-                    await events_logger.log_error("wizard_on_enter", str(result))
-                    return "Произошла ошибка при запуске."
-
-                # If this is a reply template action, return immediately
-                if result.get("type") == "reply":
-                    await redis_client.delete_wizard_state(bot_id, user_id)
-                    await events_logger.log_action_reply(
-                        result.get("template_length", 0),
-                        len(result["text"]),
-                        result.get("llm_decision")  # Pass LLM decision for result tagging
-                    )
-                    return self._format_response(result)
-
-        # If wizard has steps, start with first step
-        if steps and len(steps) > 0:
-            await redis_client.set_wizard_state(bot_id, user_id, state, ttl_sec)
-
-            first_step = steps[0]
-            # Check if first step is a widget
-            if "widget" in first_step:
-                return await self._handle_widget_step(bot_id, user_id, first_step, session)
-            else:
-                return first_step["ask"]
-
-        # No steps, just on_enter actions
-        await redis_client.delete_wizard_state(bot_id, user_id)
-        return "Готово."
-
-    async def _continue_wizard_v1(self, bot_id: str, user_id: int, text: str, state: Dict[str, Any], session) -> str:
-        """Continue existing v1 wizard flow"""
-        wizard_flow_data = state["wizard_flow"]
-        current_step = state["step"]
-        vars_data = state["vars"]
-        ttl_sec = state.get("ttl_sec", 86400)
-
-        wizard_flow = WizardFlow(**wizard_flow_data)
-        params = wizard_flow.params
-        steps = params.get("steps", [])
-
-        if current_step >= len(steps):
-            # Should not happen, but clean up state
-            await redis_client.delete_wizard_state(bot_id, user_id)
-            return "Визард завершён."
-
-        step = steps[current_step]
-
-        # Validate input if validation is configured
-        validate = step.get("validate")
-        if validate:
-            regex = validate.get("regex")
-            if regex:
-                try:
-                    if not re.match(regex, text):
-                        logger.info("wizard_v1_validation_failed",
-                                  bot_id=bot_id, user_id=user_id,
-                                  step=current_step, input=text[:50])
-                        return validate.get("msg", "Неверный формат ввода")
-                except re.error:
-                    logger.error("wizard_v1_invalid_regex", regex=regex)
-                    # Continue as if validation passed
-
-        # Store validated input
-        vars_data[step["var"]] = text
-
-        # Log step completion
-        events_logger = create_events_logger(session, bot_id, user_id)
-        await events_logger.log_wizard_step(current_step, step["var"])
-
-        logger.info("wizard_v1_step_completed",
-                   bot_id=bot_id, user_id=user_id,
-                   step=current_step, var=step["var"])
-
-        # Execute on_step actions if any
-        on_step = params.get("on_step", [])
-        if on_step:
-            action_executor = ActionExecutor(session, bot_id, user_id)
-            # Set current context
-            for var_name, var_value in vars_data.items():
-                action_executor.set_context_var(var_name, var_value)
-
-            for action_def in on_step:
-                result = await self._execute_v1_action(action_executor, action_def)
-                if not result.get("success", False):
-                    logger.error("wizard_v1_on_step_failed", result=result)
-
-        # Move to next step
-        next_step = current_step + 1
-
-        if next_step >= len(steps):
-            # All steps completed, execute on_complete actions
-            return await self._complete_wizard_v1(bot_id, user_id, wizard_flow, vars_data, session)
-        else:
-            # Update state and continue to next step
-            state["step"] = next_step
-            state["vars"] = vars_data
-            await redis_client.set_wizard_state(bot_id, user_id, state, ttl_sec)
-
-            next_step_config = steps[next_step]
-            # Check if next step is a widget
-            if "widget" in next_step_config:
-                return await self._handle_widget_step(bot_id, user_id, next_step_config, session)
-            else:
-                return next_step_config["ask"]
-
-    async def _complete_wizard_v1(self, bot_id: str, user_id: int, wizard_flow: WizardFlow, vars_data: Dict[str, Any], session) -> str:
-        """Complete v1 wizard flow"""
-        logger.info("wizard_v1_completed", bot_id=bot_id, user_id=user_id, vars=vars_data)
-
-        # Clean up wizard state
-        await redis_client.delete_wizard_state(bot_id, user_id)
-
-        # Update metrics
-        wizard_completions.labels(bot_id, wizard_flow.entry_cmd).inc()
-
-        # Execute on_complete actions
-        params = wizard_flow.params
-        on_complete = params.get("on_complete", [])
-
-        if on_complete:
-            action_executor = ActionExecutor(session, bot_id, user_id)
-
-            # Set all collected variables in context
-            for var_name, var_value in vars_data.items():
-                action_executor.set_context_var(var_name, var_value)
-
-            final_response = "Готово."
-
-            for action_def in on_complete:
-                result = await self._execute_v1_action(action_executor, action_def)
-                if not result.get("success", False):
-                    logger.error("wizard_v1_on_complete_failed", result=result)
-                    return "Произошла ошибка при завершении."
-
-                # If this is a reply template action, use its response as final response
-                if result.get("type") == "reply":
-                    final_response = self._format_response(result)
-
-            return final_response
-
-        return "Визард завершён."
-
-    async def _execute_v1_action(self, action_executor: ActionExecutor, action_def: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute action in v1 format"""
-        # Convert v1 format to current format
-        action_type = action_def.get("type")
-        action_params = action_def.get("params", {})
-
-        if action_type == "action.sql_exec.v1":
-            return await action_executor._execute_sql_exec(action_params)
-        elif action_type == "action.sql_query.v1":
-            return await action_executor._execute_sql_query(action_params)
-        elif action_type == "action.reply_template.v1":
-            return await action_executor._execute_reply_template(action_params)
-        else:
-            logger.error("wizard_v1_unknown_action", action_type=action_type)
-            return {"success": False, "error": f"Unknown action type: {action_type}"}
-
-    def parse_wizard_flows(self, spec_data: Dict[str, Any]) -> List[WizardFlow]:
-        """Parse wizard flows from bot specification"""
-        wizard_flows = []
-
-        # Check for direct wizard_flows section
-        if "wizard_flows" in spec_data:
-            for wizard_data in spec_data["wizard_flows"]:
-                wizard_flow = WizardFlow(**wizard_data)
-                wizard_flows.append(wizard_flow)
-
-        # Also check in flows section for type: "flow.wizard.v1"
-        if "flows" in spec_data:
-            for flow_data in spec_data["flows"]:
-                if isinstance(flow_data, dict) and flow_data.get("type") == "flow.wizard.v1":
-                    wizard_flow = WizardFlow(**flow_data)
-                    wizard_flows.append(wizard_flow)
-
-        return wizard_flows
-
-    async def _handle_widget_step(self, bot_id: str, user_id: int, step: Dict[str, Any], session) -> Any:
-        """Handle widget step execution"""
-        widget_config = step["widget"]
-        widget_type = widget_config["type"]
-
-        if widget_type == "widget.calendar.v1":
-            from .calendar_widget import calendar_widget
-            return await calendar_widget.render_calendar(bot_id, user_id, widget_config["params"])
-        elif widget_type == "widget.pagination.v1":
-            from .pagination_widget import pagination_widget
-            # Get current wizard state for context variables
-            wizard_state = await redis_client.get_wizard_state(bot_id, user_id)
-            context_vars = wizard_state.get("vars", {}) if wizard_state else {}
-            return await pagination_widget.render_pagination(
-                bot_id, user_id, widget_config["params"], session, context_vars
-            )
-        else:
-            logger.error("wizard_unknown_widget", widget_type=widget_type)
-            return "Неподдерживаемый виджет"
-
-    async def handle_calendar_callback(self, bot_id: str, user_id: int, callback_data: str, session) -> Optional[Any]:
-        """Handle calendar widget callback"""
-        from .calendar_widget import calendar_widget
-
-        # Get current wizard state
-        wizard_state = await redis_client.get_wizard_state(bot_id, user_id)
-        if not wizard_state or wizard_state.get("format") != "v1":
-            return None
-
-        # Handle calendar callback
-        result = await calendar_widget.handle_callback(bot_id, user_id, callback_data, session)
-
-        if result and result.get("type") == "complete":
-            # Calendar widget completed, advance wizard
-            var_name = result["var"]
-            value = result["value"]
-
-            # Store value in wizard state
-            wizard_state["vars"][var_name] = value
-
-            # Move to next step
-            current_step = wizard_state["step"]
-            wizard_flow_data = wizard_state["wizard_flow"]
-            wizard_flow = WizardFlow(**wizard_flow_data)
-            params = wizard_flow.params
-            steps = params.get("steps", [])
-
-            # Log step completion
-            events_logger = create_events_logger(session, bot_id, user_id)
-            await events_logger.log_wizard_step(current_step, var_name)
-
-            # Move to next step
-            next_step = current_step + 1
-
-            if next_step >= len(steps):
-                # Wizard completed
-                await redis_client.delete_wizard_state(bot_id, user_id)
-                return await self._complete_wizard_v1(bot_id, user_id, wizard_flow, wizard_state["vars"], session)
-            else:
-                # Update state and continue
-                wizard_state["step"] = next_step
-                ttl_sec = wizard_state.get("ttl_sec", 86400)
-                await redis_client.set_wizard_state(bot_id, user_id, wizard_state, ttl_sec)
-
-                next_step_config = steps[next_step]
-                if "widget" in next_step_config:
-                    return await self._handle_widget_step(bot_id, user_id, next_step_config, session)
-                else:
-                    return {
-                        "type": "edit_message",
-                        "text": next_step_config["ask"]
-                    }
-
-        return result
-
-    async def handle_pagination_navigation(self, bot_id: str, user_id: int, nav_result: Dict[str, Any], session) -> Optional[Any]:
-        """Handle pagination navigation callback"""
-        # Get current wizard state
-        wizard_state = await redis_client.get_wizard_state(bot_id, user_id)
-        if not wizard_state or wizard_state.get("format") != "v1":
-            return None
-
-        # Extract navigation info
-        page = nav_result.get("page", 0)
-
-        # Get current step configuration
-        current_step = wizard_state.get("step", 0)
-        from .dsl_engine import load_spec
-        wizard_flows = self.parse_wizard_flows(await load_spec(bot_id))
-
-        for wizard_flow in wizard_flows:
-            if wizard_flow.entry_cmd in wizard_state.get("vars", {}).get("_entry_cmd", ""):
-                steps = wizard_flow.params.get("steps", [])
-                if current_step < len(steps):
-                    step_config = steps[current_step]
-                    if "widget" in step_config and step_config["widget"]["type"] == "widget.pagination.v1":
-                        # Re-render pagination with new page
-                        widget_params = step_config["widget"]["params"].copy()
-                        widget_params["current_page"] = page
-
-                        from .pagination_widget import pagination_widget
-                        result = await pagination_widget.render_pagination(
-                            bot_id, user_id, widget_params, session, wizard_state.get("vars", {})
-                        )
-
-                        if result and result.get("success"):
-                            return {
-                                "type": "edit_message",
-                                "text": result["text"],
-                                "keyboard": result["keyboard"]
-                            }
-
-        return None
-
-    async def handle_pagination_selection(self, bot_id: str, user_id: int, selection_result: Dict[str, Any], session) -> Optional[Any]:
-        """Handle pagination item selection callback"""
-        # Get current wizard state
-        wizard_state = await redis_client.get_wizard_state(bot_id, user_id)
-        if not wizard_state or wizard_state.get("format") != "v1":
-            return None
-
-        selected_id = selection_result.get("selected_id")
-        if not selected_id:
-            return None
-
-        # Store selected value and advance wizard
-        current_step = wizard_state.get("step", 0)
-        from .dsl_engine import load_spec
-        wizard_flows = self.parse_wizard_flows(await load_spec(bot_id))
-
-        for wizard_flow in wizard_flows:
-            # Find the correct wizard flow (simplified - in real implementation you'd store flow id in state)
-            steps = wizard_flow.params.get("steps", [])
-            if current_step < len(steps):
-                step_config = steps[current_step]
-                if "widget" in step_config and step_config["widget"]["type"] == "widget.pagination.v1":
-                    var_name = step_config.get("var", "selected_item")
-
-                    # Store selected value
-                    wizard_state["vars"][var_name] = selected_id
-
-                    # Move to next step
-                    next_step = current_step + 1
-
-                    if next_step >= len(steps):
-                        # Complete wizard
-                        return await self._complete_wizard_v1(bot_id, user_id, wizard_flow, wizard_state["vars"], session)
-                    else:
-                        # Move to next step
-                        wizard_state["step"] = next_step
-                        ttl_sec = wizard_state.get("ttl_sec", 86400)
-                        await redis_client.set_wizard_state(bot_id, user_id, wizard_state, ttl_sec)
-
-                        next_step_config = steps[next_step]
-                        if "widget" in next_step_config:
-                            return await self._handle_widget_step(bot_id, user_id, next_step_config, session)
-                        else:
-                            return {
-                                "type": "edit_message",
-                                "text": next_step_config["ask"]
-                            }
-
-        return None
-
-    async def reset_wizard(self, bot_id: str, user_id: int):
-        """Reset/cancel current wizard"""
-        await redis_client.delete_wizard_state(bot_id, user_id)
-        logger.info("wizard_reset", bot_id=bot_id, user_id=user_id)
-
-# Global wizard engine instance
-wizard_engine = WizardEngine()
+    flow = next((f for f in spec.get("flows", []) if f.get("entry_cmd") == state["flow_id"]), None)
+    if not flow:
+        wizard_errors_total.labels(bot_id, state.get("flow_id")).inc()
+        await delete_wizard_state(bot_id, user_id)
+        wizard_active_total.labels(bot_id).dec()
+        return {"text": "Error: Wizard configuration not found. Your session has been reset."}
+
+    steps = flow["params"]["steps"]
+    current_step_index = state["step_index"]
+    
+    if current_step_index >= len(steps):
+        await delete_wizard_state(bot_id, user_id)
+        wizard_active_total.labels(bot_id).dec()
+        return {"text": "You have already completed the wizard."}
+
+    current_step = steps[current_step_index]
+
+    if "validate_regex" in current_step:
+        if not re.match(current_step["validate_regex"], text):
+            wizard_errors_total.labels(bot_id, flow["entry_cmd"]).inc()
+            return {"text": f"Invalid input. Please try again.\n{current_step['ask']}"}
+
+    state["vars"][current_step["var"]] = text
+    state["step_index"] += 1
+    wizard_steps_total.labels(bot_id, flow["entry_cmd"]).inc()
+
+    if state["step_index"] >= len(steps):
+        await delete_wizard_state(bot_id, user_id)
+        wizard_active_total.labels(bot_id).dec()
+        return await execute_actions(bot_id, user_id, flow["params"].get("on_complete", []), state.get("vars", {}))
+    else:
+        next_step = steps[state["step_index"]]
+        await set_wizard_state(bot_id, user_id, state)
+        return {"text": next_step["ask"]}
+
+async def cancel_wizard(bot_id: str, user_id: int) -> str:
+    state = await get_wizard_state(bot_id, user_id)
+    if state:
+        await delete_wizard_state(bot_id, user_id)
+        wizard_active_total.labels(bot_id).dec()
+    return "Your operation has been cancelled."
+
+async def execute_actions(bot_id: str, user_id: int, actions: list, context_vars: dict) -> Optional[Dict[str, Any]]:
+    final_reply = None
+    async with async_session() as session:
+        executor = ActionExecutor(session, bot_id, user_id)
+        executor.context = context_vars
+
+        for action_def in actions:
+            action_key = action_def["type"].replace(".", "_")
+            adapted_action = {action_key.replace("_", "."): action_def["params"]}
+            
+            action_result = await executor.execute_action(adapted_action)
+            if not action_result.get("success"):
+                # Consider logging the error more formally
+                return {"text": f"An error occurred: {action_result.get('error', 'Unknown error')}"}
+            
+            if action_result.get("type") == "reply":
+                final_reply = action_result
+
+    return final_reply or {"text": "Actions completed successfully."}
+
+# --- Router Registration ---
+
+def find_flow_by_cmd(spec: dict, command: str) -> Optional[dict]:
+    for flow in spec.get("flows", []):
+        if flow.get("entry_cmd") == command:
+            return flow
+    return None
+
+def register_wizard_flows(router: Router, spec: dict):
+    for flow in spec.get("flows", []):
+        flow_type = flow.get("type")
+        command = flow.get("entry_cmd")
+
+        if not (command and command.startswith("/")):
+            continue
+
+        cmd_name = command.lstrip('/')
+
+        if flow_type == "flow.wizard.v1":
+            @router.message(Command(commands=[cmd_name]))
+            async def wizard_start_handler(message: Message, s=spec, c=command):
+                bot_id = getattr(message, 'bot_id', 'unknown')
+                user_id = message.from_user.id
+                flow_def = find_flow_by_cmd(s, c)
+                if flow_def:
+                    reply_text = await start_wizard(bot_id, user_id, flow_def)
+                    await message.answer(reply_text)
+        
+        elif flow_type == "flow.generic.v1":
+            @router.message(Command(commands=[cmd_name]))
+            async def generic_flow_handler(message: Message, s=spec, c=command):
+                bot_id = getattr(message, 'bot_id', 'unknown')
+                user_id = message.from_user.id
+                flow_def = find_flow_by_cmd(s, c)
+                if flow_def:
+                    result = await execute_actions(bot_id, user_id, flow_def["params"].get("on_enter", []), {})
+                    if result and result.get("text"):
+                        reply_markup = None
+                        if result.get("reply_markup") and isinstance(result["reply_markup"], dict):
+                            reply_markup = InlineKeyboardMarkup(**result["reply_markup"])
+                        await message.answer(result["text"], reply_markup=reply_markup)
+
+    @router.message(Command(commands=["cancel"]))
+    async def cancel_handler(message: Message):
+        bot_id = getattr(message, 'bot_id', 'unknown')
+        user_id = message.from_user.id
+        reply_text = await cancel_wizard(bot_id, user_id)
+        await message.answer(reply_text)

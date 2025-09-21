@@ -1,6 +1,10 @@
-from prometheus_client import Counter, Histogram, generate_latest
-from time import perf_counter
-from fastapi import HTTPException
+from prometheus_client import Counter, Histogram, generate_latest, Gauge
+
+# Management API metrics
+api_requests_total = Counter("api_requests_total", "Total management API requests", ["route", "code"])
+dsl_validate_errors_total = Counter("dsl_validate_errors_total", "Total DSL validation errors")
+bot_reload_total = Counter("bot_reload_total", "Total bot reloads", ["bot_id"])
+bot_prepare_total = Counter("bot_prepare_total", "Total bot preparations", ["bot_id"])
 
 # Prometheus metrics
 updates = Counter("bot_updates_total", "Total bot updates", ["bot_id"])
@@ -9,6 +13,8 @@ webhook_lat = Histogram("webhook_latency_ms", "Webhook latency in milliseconds",
 errors = Counter("bot_errors_total", "Total bot errors", ["bot_id", "where", "code"])
 
 # New metrics for wizards and actions
+wizard_active_total = Gauge("wizard_active_total", "Total active wizards", ["bot_id"])
+wizard_errors_total = Counter("wizard_errors_total", "Total wizard errors", ["bot_id", "flow_cmd"])
 wizard_flows = Counter("wizard_flows_total", "Total wizard flows started", ["bot_id", "flow_cmd"])
 wizard_steps = Counter("wizard_steps_total", "Total wizard steps completed", ["bot_id", "flow_cmd"])
 wizard_completions = Counter("wizard_completions_total", "Total wizard completions", ["bot_id", "flow_cmd"])

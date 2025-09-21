@@ -1,0 +1,165 @@
+# HELP python_gc_objects_collected_total Objects collected during gc
+# TYPE python_gc_objects_collected_total counter
+python_gc_objects_collected_total{generation="0"} 1164.0
+python_gc_objects_collected_total{generation="1"} 750.0
+python_gc_objects_collected_total{generation="2"} 81.0
+# HELP python_gc_objects_uncollectable_total Uncollectable objects found during GC
+# TYPE python_gc_objects_uncollectable_total counter
+python_gc_objects_uncollectable_total{generation="0"} 0.0
+python_gc_objects_uncollectable_total{generation="1"} 0.0
+python_gc_objects_uncollectable_total{generation="2"} 0.0
+# HELP python_gc_collections_total Number of times this generation was collected
+# TYPE python_gc_collections_total counter
+python_gc_collections_total{generation="0"} 387.0
+python_gc_collections_total{generation="1"} 35.0
+python_gc_collections_total{generation="2"} 3.0
+# HELP python_info Python platform information
+# TYPE python_info gauge
+python_info{implementation="CPython",major="3",minor="11",patchlevel="13",version="3.11.13"} 1.0
+# HELP process_virtual_memory_bytes Virtual memory size in bytes.
+# TYPE process_virtual_memory_bytes gauge
+process_virtual_memory_bytes 5.81632e+08
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 1.72802048e+08
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.75844822186e+09
+# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total 4.819999999999999
+# HELP process_open_fds Number of open file descriptors.
+# TYPE process_open_fds gauge
+process_open_fds 17.0
+# HELP process_max_fds Maximum number of open file descriptors.
+# TYPE process_max_fds gauge
+process_max_fds 1.048576e+06
+# HELP bot_updates_total Total bot updates
+# TYPE bot_updates_total counter
+# HELP dsl_handle_latency_ms DSL handle latency in milliseconds
+# TYPE dsl_handle_latency_ms histogram
+dsl_handle_latency_ms_bucket{le="0.01"} 0.0
+dsl_handle_latency_ms_bucket{le="0.05"} 0.0
+dsl_handle_latency_ms_bucket{le="0.1"} 0.0
+dsl_handle_latency_ms_bucket{le="0.2"} 0.0
+dsl_handle_latency_ms_bucket{le="0.5"} 0.0
+dsl_handle_latency_ms_bucket{le="1.0"} 0.0
+dsl_handle_latency_ms_bucket{le="2.0"} 0.0
+dsl_handle_latency_ms_bucket{le="5.0"} 0.0
+dsl_handle_latency_ms_bucket{le="+Inf"} 0.0
+dsl_handle_latency_ms_count 0.0
+dsl_handle_latency_ms_sum 0.0
+# HELP dsl_handle_latency_ms_created DSL handle latency in milliseconds
+# TYPE dsl_handle_latency_ms_created gauge
+dsl_handle_latency_ms_created 1.7584482257474911e+09
+# HELP webhook_latency_ms Webhook latency in milliseconds
+# TYPE webhook_latency_ms histogram
+webhook_latency_ms_bucket{le="0.01"} 0.0
+webhook_latency_ms_bucket{le="0.05"} 0.0
+webhook_latency_ms_bucket{le="0.1"} 0.0
+webhook_latency_ms_bucket{le="0.2"} 0.0
+webhook_latency_ms_bucket{le="0.5"} 0.0
+webhook_latency_ms_bucket{le="1.0"} 0.0
+webhook_latency_ms_bucket{le="2.0"} 0.0
+webhook_latency_ms_bucket{le="+Inf"} 0.0
+webhook_latency_ms_count 0.0
+webhook_latency_ms_sum 0.0
+# HELP webhook_latency_ms_created Webhook latency in milliseconds
+# TYPE webhook_latency_ms_created gauge
+webhook_latency_ms_created 1.7584482257475448e+09
+# HELP bot_errors_total Total bot errors
+# TYPE bot_errors_total counter
+# HELP wizard_flows_total Total wizard flows started
+# TYPE wizard_flows_total counter
+# HELP wizard_steps_total Total wizard steps completed
+# TYPE wizard_steps_total counter
+# HELP wizard_completions_total Total wizard completions
+# TYPE wizard_completions_total counter
+# HELP sql_actions_total Total SQL actions executed
+# TYPE sql_actions_total counter
+# HELP bot_sql_exec_total Total SQL exec actions
+# TYPE bot_sql_exec_total counter
+# HELP bot_sql_query_total Total SQL query actions
+# TYPE bot_sql_query_total counter
+# HELP sql_action_latency_ms SQL action latency in milliseconds
+# TYPE sql_action_latency_ms histogram
+sql_action_latency_ms_bucket{le="0.1"} 0.0
+sql_action_latency_ms_bucket{le="0.5"} 0.0
+sql_action_latency_ms_bucket{le="1.0"} 0.0
+sql_action_latency_ms_bucket{le="2.0"} 0.0
+sql_action_latency_ms_bucket{le="5.0"} 0.0
+sql_action_latency_ms_bucket{le="10.0"} 0.0
+sql_action_latency_ms_bucket{le="20.0"} 0.0
+sql_action_latency_ms_bucket{le="50.0"} 0.0
+sql_action_latency_ms_bucket{le="+Inf"} 0.0
+sql_action_latency_ms_count 0.0
+sql_action_latency_ms_sum 0.0
+# HELP sql_action_latency_ms_created SQL action latency in milliseconds
+# TYPE sql_action_latency_ms_created gauge
+sql_action_latency_ms_created 1.7584482257476413e+09
+# HELP dsl_action_latency_ms DSL action latency by type
+# TYPE dsl_action_latency_ms histogram
+# HELP template_renders_total Total template renders
+# TYPE template_renders_total counter
+# HELP widget_calendar_renders_total Total calendar widget renders
+# TYPE widget_calendar_renders_total counter
+# HELP widget_calendar_picks_total Total calendar picks
+# TYPE widget_calendar_picks_total counter
+# HELP widget_pagination_renders_total Total pagination widget renders
+# TYPE widget_pagination_renders_total counter
+# HELP widget_pagination_selects_total Total pagination selections
+# TYPE widget_pagination_selects_total counter
+# HELP llm_budget_usage_total Total LLM budget usage in tokens
+# TYPE llm_budget_usage_total counter
+# HELP llm_budget_limits_hit_total Budget limits hit
+# TYPE llm_budget_limits_hit_total counter
+# HELP llm_requests_total Total LLM requests
+# TYPE llm_requests_total counter
+# HELP llm_latency_ms LLM request latency
+# TYPE llm_latency_ms histogram
+# HELP llm_errors_total Total LLM errors
+# TYPE llm_errors_total counter
+# HELP llm_tokens_total Total LLM tokens
+# TYPE llm_tokens_total counter
+# HELP llm_cache_hits_total Total LLM cache hits
+# TYPE llm_cache_hits_total counter
+# HELP llm_json_requests_total Total LLM JSON requests
+# TYPE llm_json_requests_total counter
+# HELP llm_json_validation_success_total Successful JSON validations
+# TYPE llm_json_validation_success_total counter
+# HELP llm_json_validation_failed_total Failed JSON validations
+# TYPE llm_json_validation_failed_total counter
+# HELP reply_sent_total Total replies sent
+# TYPE reply_sent_total counter
+# HELP reply_failed_total Total reply failures
+# TYPE reply_failed_total counter
+# HELP reply_latency_ms Reply template rendering latency
+# TYPE reply_latency_ms histogram
+# HELP broadcast_total Total broadcast campaigns created
+# TYPE broadcast_total counter
+# HELP broadcast_sent_total Total broadcast messages sent
+# TYPE broadcast_sent_total counter
+# HELP broadcast_failed_total Total broadcast messages failed
+# TYPE broadcast_failed_total counter
+# HELP broadcast_duration_seconds Broadcast campaign duration
+# TYPE broadcast_duration_seconds histogram
+# HELP i18n_renders_total Total i18n renders
+# TYPE i18n_renders_total counter
+# HELP i18n_key_miss_total Total i18n key misses
+# TYPE i18n_key_miss_total counter
+# HELP i18n_cache_hits_total Total i18n cache hits
+# TYPE i18n_cache_hits_total counter
+# HELP i18n_cache_misses_total Total i18n cache misses
+# TYPE i18n_cache_misses_total counter
+# HELP policy_ratelimit_hits_total Total rate limit hits
+# TYPE policy_ratelimit_hits_total counter
+# HELP policy_ratelimit_pass_total Total rate limit passes
+# TYPE policy_ratelimit_pass_total counter
+# HELP circuit_breaker_state_changes_total Circuit breaker state changes
+# TYPE circuit_breaker_state_changes_total counter
+# HELP circuit_breaker_open_duration_seconds Duration circuit breaker was open
+# TYPE circuit_breaker_open_duration_seconds histogram
+# HELP llm_timeout_total Total LLM timeouts
+# TYPE llm_timeout_total counter
+# HELP llm_circuit_breaker_rejections_total Total requests rejected by circuit breaker
+# TYPE llm_circuit_breaker_rejections_total counter

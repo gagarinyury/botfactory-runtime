@@ -1,0 +1,26 @@
+{
+  "use": ["flow.menu.v1","flow.wizard.v1","action.reply_template.v1","action.sql_exec.v1","action.sql_query.v1"],
+  "flows": [
+    {"type":"flow.menu.v1","entry_cmd":"/start","params":{
+      "title":"Главное меню",
+      "options":[{"text":"Записаться","callback":"/book"},{"text":"Мои записи","callback":"/my"}]
+    }},
+    {"type":"flow.wizard.v1","entry_cmd":"/book","params":{
+      "steps":[
+        {"ask":"Услуга? (массаж/стрижка/маникюр)","var":"service","validate_regex":"^(массаж|стрижка|маникюр)$"},
+        {"ask":"Когда? YYYY-MM-DD HH:MM","var":"slot","validate_regex":"^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$"}
+      ],
+      "on_complete":[
+        {"type":"action.sql_exec.v1","params":{"sql":"INSERT INTO bookings(bot_id,user_id,service,slot) VALUES(:bot_id,:user_id,:service,to_timestamp(:slot,''YYYY-MM-DD HH24:MI''))"}},
+        {"type":"action.reply_template.v1","params":{"text":"Запись создана: {{service}} на {{slot}}"}}
+      ]
+    }},
+    {"type":"flow.generic.v1","entry_cmd":"/my","params": {
+      "on_enter":[
+        {"type":"action.sql_query.v1","params":{"sql":"SELECT service, to_char(slot,''YYYY-MM-DD HH24:MI'') AS t FROM bookings WHERE bot_id=:bot_id AND user_id=:user_id ORDER BY slot DESC LIMIT 5","result_var":"rows"}},
+        {"type":"action.reply_template.v1","params":{"text":"{{#each rows}}• {{service}} — {{t}}\n{{/each}}","empty_text":"У вас нет записей"}}
+      ]}
+    }
+  ],
+  "intents":[{"cmd":"/help","reply":"Доступно: /start, /book, /my, /cancel"}]
+}

@@ -131,23 +131,6 @@ async def get_bot_spec(bot_id: str):
         else:
             fail(500, "internal", "Internal server error", detail=str(e))
 
-@app.post("/bots/{bot_id}/reload")
-async def reload_bot(bot_id: str):
-    """Invalidate cache for bot"""
-    # Clear simple cache
-    if bot_id in bot_cache:
-        del bot_cache[bot_id]
-
-    # Clear all versioned router cache entries for this bot
-    keys_to_remove = [key for key in router_cache.keys() if key.startswith(f"{bot_id}:")]
-    for key in keys_to_remove:
-        del router_cache[key]
-
-    # Clear i18n cache for this bot
-    from .i18n_manager import i18n_manager
-    i18n_manager.invalidate_cache(bot_id)
-
-    return {"bot_id": bot_id, "cache_invalidated": True, "message": "Bot cache cleared"}
 
 # I18n API endpoints
 @app.post("/bots/{bot_id}/i18n/keys")
@@ -358,45 +341,86 @@ async def tg_webhook(bot_id: str, update: dict):
     async def process_update(bot_id: str, update: dict):
         """Process Telegram update"""
         from aiogram import Bot, Dispatcher
-        from aiogram.types import Update
+        from aiogram.types import Update, Message, CallbackQuery, InlineKeyboardMarkup
         from .dsl_engine import build_router
+        from . import wizard_engine
 
-        # Load bot spec and build router
+        updates.labels(bot_id).inc()
+
         async with async_session() as session:
             bot_config = await loader.load_spec_by_bot_id(session, bot_id)
             if not bot_config:
+                log.error("bot_not_found", bot_id=bot_id)
                 return {"ok": False, "error": "Bot not found"}
 
-            # Get bot token from database
             from sqlalchemy import text
-            bot_token_query = await session.execute(
-                text("SELECT token FROM bots WHERE id = :bot_id"),
-                {"bot_id": bot_id}
-            )
-            bot_token_result = bot_token_query.fetchone()
-            if not bot_token_result:
+            bot_token_res = await session.execute(text("SELECT token FROM bots WHERE id = :bot_id"), {"bot_id": bot_id})
+            bot_token = bot_token_res.scalar_one_or_none()
+            if not bot_token:
+                log.error("bot_token_not_found", bot_id=bot_id)
                 return {"ok": False, "error": "Bot token not found"}
 
-            bot_token = bot_token_result[0]
-
-            # Create aiogram instances
             bot = Bot(token=bot_token)
             dp = Dispatcher()
+            spec = bot_config["spec_json"]
 
-            # Build and include router from spec
-            router = build_router(bot_config["spec_json"])
+            # 1. Handler for wizard steps
+            async def message_handler(message: Message):
+                user_id = message.from_user.id
+                state = await wizard_engine.get_wizard_state(bot_id, user_id)
+                if state:
+                    result = await wizard_engine.handle_step(bot_id, user_id, message.text, spec)
+                    if result and result.get("text"):
+                        # Convert dict keyboard to aiogram object if present
+                        reply_markup = None
+                        if result.get("reply_markup") and isinstance(result["reply_markup"], dict):
+                            reply_markup = InlineKeyboardMarkup(**result["reply_markup"])
+                        await message.answer(result["text"], reply_markup=reply_markup)
+                    return True # Indicate that the message was handled
+                return False # No active wizard, let other handlers process
+
+            # 2. Handler for callback queries (e.g., from menus)
+            async def callback_query_handler(query: CallbackQuery):
+                if query.data.startswith("/"):
+                    # Emulate a command message
+                    new_message = Message(
+                        message_id=query.message.message_id, # Not perfect, but needed
+                        date=query.message.date,
+                        chat=query.message.chat,
+                        from_user=query.from_user,
+                        text=query.data
+                    )
+                    setattr(new_message, 'bot_id', bot_id) # Inject bot_id
+                    await message_handler(new_message)
+                    # After handling, try to feed it to the router as well
+                    router = build_router(spec)
+                    dp_temp = Dispatcher()
+                    dp_temp.include_router(router)
+                    await dp_temp.feed_update(bot, Update(message=new_message, update_id=query.update.update_id))
+                    await query.answer() # Acknowledge the callback
+                else:
+                    # For other callbacks (e.g., widgets), can be extended here
+                    await query.answer(f"Callback received: {query.data}")
+
+            # Register handlers
+            dp.message.register(message_handler)
+            dp.callback_query.register(callback_query_handler)
+
+            # Build and include the main router for commands
+            router = build_router(spec)
             dp.include_router(router)
 
-            # Process the update
+            # Inject bot_id into the update object for handlers to use
             aiogram_update = Update.model_validate(update)
-            await dp.feed_update(bot, aiogram_update)
+            if aiogram_update.message:
+                setattr(aiogram_update.message, 'bot_id', bot_id)
+            elif aiogram_update.callback_query:
+                setattr(aiogram_update.callback_query.message, 'bot_id', bot_id)
 
+            await dp.feed_update(bot, aiogram_update)
             return {"ok": True}
 
-    # Add metrics and logging
     tid = with_trace()
-
-    # Mask sensitive data in update
     masked_update = mask_sensitive_data(update)
     log.info("webhook", bot_id=bot_id, trace_id=tid, update_id=update.get("update_id"), update_preview=str(masked_update)[:200])
 
@@ -404,15 +428,21 @@ async def tg_webhook(bot_id: str, update: dict):
         result = await measured_webhook(bot_id, process_update, bot_id, update)
         return result
     except HTTPException:
-        raise  # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
+        errors.labels(bot_id).inc()
+        log.error("webhook_error", bot_id=bot_id, trace_id=tid, error=str(e), exc_info=True)
         if "db" in str(e).lower() or "database" in str(e).lower():
             fail(503, "db_unavailable", "Database connection failed")
-        elif isinstance(e, KeyError):
-            fail(400, "bad_request", "Invalid input data", field=str(e))
         else:
             fail(500, "internal", "Internal server error", detail=str(e))
 
 # Include additional routers
 from .budget_api import router as budget_router
 app.include_router(budget_router)
+
+# Include the new management API
+from .management_api import router as management_router
+from .management_api import spec_router as validate_router
+app.include_router(management_router)
+app.include_router(validate_router)
