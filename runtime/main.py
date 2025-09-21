@@ -6,8 +6,8 @@ from .registry import BotRegistry
 from .loader import BotLoader
 from .dsl_engine import DSLEngine
 from prometheus_client import generate_latest
-from .logging_setup import log, bind_ctx, mask_sensitive_data  # импорт даёт конфиг
-from .schemas import PreviewRequest, BotReplyResponse
+from .logging_setup import log, bind_ctx, mask_sensitive_data, mask_user_input_in_logs, mask_user_text  # импорт даёт конфиг
+from .schemas import PreviewRequest, BotReplyResponse, BroadcastRequest, BroadcastResponse
 
 app = FastAPI()
 registry = BotRegistry()
@@ -101,7 +101,180 @@ async def reload_bot(bot_id: str):
     for key in keys_to_remove:
         del router_cache[key]
 
+    # Clear i18n cache for this bot
+    from .i18n_manager import i18n_manager
+    i18n_manager.invalidate_cache(bot_id)
+
     return {"bot_id": bot_id, "cache_invalidated": True, "message": "Bot cache cleared"}
+
+# I18n API endpoints
+@app.post("/bots/{bot_id}/i18n/keys")
+async def set_i18n_keys(bot_id: str, data: dict):
+    """Bulk set i18n keys for bot"""
+    from .i18n_manager import i18n_manager
+    from .http_errors import fail
+
+    try:
+        locale = data.get("locale")
+        keys = data.get("keys", {})
+
+        if not locale:
+            fail(400, "bad_request", "Locale is required")
+
+        if not isinstance(keys, dict):
+            fail(400, "bad_request", "Keys must be a dictionary")
+
+        async with async_session() as session:
+            success = await i18n_manager.bulk_set_keys(session, bot_id, locale, keys)
+
+            if success:
+                # Invalidate cache for this bot
+                i18n_manager.invalidate_cache(bot_id, locale)
+
+                return {
+                    "bot_id": bot_id,
+                    "locale": locale,
+                    "keys_count": len(keys),
+                    "success": True
+                }
+            else:
+                fail(400, "bad_request", "Failed to set i18n keys")
+
+    except Exception as e:
+        if "db" in str(e).lower() or "database" in str(e).lower():
+            fail(503, "db_unavailable", "Database connection failed")
+        else:
+            fail(500, "internal", "Internal server error", detail=str(e))
+
+@app.get("/bots/{bot_id}/i18n/keys")
+async def get_i18n_keys(bot_id: str, locale: str = "ru"):
+    """Get i18n keys for bot and locale"""
+    from .i18n_manager import i18n_manager
+    from .http_errors import fail
+
+    try:
+        async with async_session() as session:
+            keys = await i18n_manager.get_keys(session, bot_id, locale)
+
+            return {
+                "bot_id": bot_id,
+                "locale": locale,
+                "keys": keys,
+                "keys_count": len(keys)
+            }
+
+    except Exception as e:
+        if "db" in str(e).lower() or "database" in str(e).lower():
+            fail(503, "db_unavailable", "Database connection failed")
+        else:
+            fail(500, "internal", "Internal server error", detail=str(e))
+
+@app.post("/bots/{bot_id}/i18n/locale")
+async def set_user_locale(bot_id: str, data: dict):
+    """Set user locale preference"""
+    from .i18n_manager import i18n_manager
+    from .http_errors import fail
+
+    try:
+        locale = data.get("locale")
+        user_id = data.get("user_id")
+        chat_id = data.get("chat_id")
+
+        if not locale:
+            fail(400, "bad_request", "Locale is required")
+
+        if not user_id and not chat_id:
+            fail(400, "bad_request", "Either user_id or chat_id is required")
+
+        async with async_session() as session:
+            success = await i18n_manager.set_user_locale(
+                session, bot_id, locale, user_id, chat_id
+            )
+
+            if success:
+                return {
+                    "bot_id": bot_id,
+                    "locale": locale,
+                    "user_id": user_id,
+                    "chat_id": chat_id,
+                    "success": True
+                }
+            else:
+                fail(400, "bad_request", "Failed to set user locale")
+
+    except Exception as e:
+        if "db" in str(e).lower() or "database" in str(e).lower():
+            fail(503, "db_unavailable", "Database connection failed")
+        else:
+            fail(500, "internal", "Internal server error", detail=str(e))
+
+@app.post("/bots/{bot_id}/broadcast", response_model=BroadcastResponse)
+async def create_broadcast(bot_id: str, request: BroadcastRequest):
+    """Create and start a broadcast campaign"""
+    from .broadcast_engine import broadcast_engine
+    from .http_errors import fail
+
+    try:
+        async with async_session() as session:
+            # Create broadcast
+            broadcast_id = await broadcast_engine.create_broadcast(
+                session, bot_id, request.audience, request.message, request.throttle
+            )
+
+            # Start broadcast execution
+            started = await broadcast_engine.start_broadcast(session, broadcast_id)
+
+            if started:
+                return BroadcastResponse(
+                    broadcast_id=broadcast_id,
+                    status="running",
+                    message="Broadcast campaign started successfully"
+                )
+            else:
+                fail(500, "start_failed", "Failed to start broadcast campaign")
+
+    except ValueError as e:
+        fail(400, "validation_error", str(e))
+    except Exception as e:
+        if "db" in str(e).lower() or "database" in str(e).lower():
+            fail(503, "db_unavailable", "Database connection failed")
+        else:
+            fail(500, "internal", "Internal server error", detail=str(e))
+
+@app.get("/bots/{bot_id}/broadcasts/{broadcast_id}")
+async def get_broadcast_status(bot_id: str, broadcast_id: str):
+    """Get broadcast campaign status and progress"""
+    from .broadcast_engine import broadcast_engine
+    from .http_errors import fail
+
+    try:
+        async with async_session() as session:
+            status = await broadcast_engine.get_broadcast_status(session, broadcast_id)
+
+            if not status:
+                fail(404, "not_found", "Broadcast not found")
+
+            if status["bot_id"] != bot_id:
+                fail(403, "forbidden", "Broadcast belongs to different bot")
+
+            return {
+                "broadcast_id": broadcast_id,
+                "bot_id": bot_id,
+                "status": status["status"],
+                "audience": status["audience"],
+                "total_users": status["total_users"],
+                "sent_count": status["sent_count"],
+                "failed_count": status["failed_count"],
+                "created_at": status["created_at"],
+                "started_at": status["started_at"],
+                "completed_at": status["completed_at"]
+            }
+
+    except Exception as e:
+        if "db" in str(e).lower() or "database" in str(e).lower():
+            fail(503, "db_unavailable", "Database connection failed")
+        else:
+            fail(500, "internal", "Internal server error", detail=str(e))
 
 @app.get("/metrics")
 def metrics():
@@ -117,7 +290,7 @@ async def preview_send(p: PreviewRequest):
     from .http_errors import fail
 
     tid = with_trace()
-    log.info("preview", bot_id=bot_id, trace_id=tid, text=text[:64])  # limit text in logs
+    log.info("preview", bot_id=bot_id, trace_id=tid, text=mask_user_text(text))  # mask user text in logs
 
     try:
         bot_reply = await measured_preview(bot_id, handle, bot_id, text)
@@ -197,3 +370,7 @@ async def tg_webhook(bot_id: str, update: dict):
             fail(400, "bad_request", "Invalid input data", field=str(e))
         else:
             fail(500, "internal", "Internal server error", detail=str(e))
+
+# Include additional routers
+from .budget_api import router as budget_router
+app.include_router(budget_router)

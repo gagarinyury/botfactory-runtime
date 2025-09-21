@@ -1,0 +1,28 @@
+# Prometheus configuration for TGI monitoring
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # TGI metrics
+  - job_name: 'tgi'
+    static_configs:
+      - targets: ['tgi:3000']
+    scrape_interval: 5s
+    metrics_path: /metrics
+
+  # Botfactory Runtime metrics
+  - job_name: 'botfactory-runtime'
+    static_configs:
+      - targets: ['runtime:8000']
+    scrape_interval: 15s
+    metrics_path: /metrics
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

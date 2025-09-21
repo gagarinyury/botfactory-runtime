@@ -1,0 +1,235 @@
+{
+  "use": [
+    "flow.wizard.v1",
+    "policy.ratelimit.v1",
+    "action.sql_exec.v1",
+    "action.sql_query.v1",
+    "action.reply_template.v1"
+  ],
+  "intents": [
+    {"cmd": "/help", "reply": "Доступные команды: /start, /book, /feedback, /status"}
+  ],
+  "flows": [
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/start",
+      "params": {
+        "on_enter": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "user",
+              "window_s": 30,
+              "allowance": 3,
+              "key_suffix": "{{entry_cmd}}",
+              "message": "Слишком часто запускаете /start. Подождите {{retry_in}} секунд."
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "🤖 Добро пожаловать!\n\nДоступные команды:\n• /book - Забронировать услугу\n• /feedback - Оставить отзыв\n• /status - Проверить статус\n\nРазрешено 3 запуска /start в 30 секунд."
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/book",
+      "params": {
+        "on_enter": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "user",
+              "window_s": 120,
+              "allowance": 1,
+              "key_suffix": "booking",
+              "message": "⏰ Одно бронирование в 2 минуты. Попробуйте через {{retry_in}} сек."
+            }
+          }
+        ],
+        "steps": [
+          {
+            "ask": "Выберите услугу: массаж/маникюр/стрижка",
+            "var": "service",
+            "validate": {
+              "regex": "^(массаж|маникюр|стрижка)$",
+              "msg": "Выберите из списка: массаж, маникюр, стрижка"
+            }
+          },
+          {
+            "ask": "Дата и время (YYYY-MM-DD HH:MM)",
+            "var": "slot",
+            "validate": {
+              "regex": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$",
+              "msg": "Используйте формат: YYYY-MM-DD HH:MM"
+            }
+          }
+        ],
+        "on_step": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "user",
+              "window_s": 60,
+              "allowance": 2,
+              "key_suffix": "step:{{service}}",
+              "message": "🛑 Слишком быстро заполняете форму для {{service}}. Подождите {{retry_in}} сек."
+            }
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "INSERT INTO bookings(bot_id, user_id, service, slot, created_at) VALUES(:bot_id, :user_id, :service, to_timestamp(:slot, 'YYYY-MM-DD HH24:MI'), NOW())"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "✅ Запись создана!\n\n📋 Детали:\n• Услуга: {{service}}\n• Время: {{slot}}\n\n⏰ Следующее бронирование разрешено через 2 минуты."
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/feedback",
+      "params": {
+        "on_enter": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "user",
+              "window_s": 300,
+              "allowance": 2,
+              "key_suffix": "feedback",
+              "message": "📝 Не более 2 отзывов в 5 минут. Попробуйте через {{retry_in}} сек."
+            }
+          }
+        ],
+        "steps": [
+          {
+            "ask": "Оцените сервис от 1 до 5",
+            "var": "rating",
+            "validate": {
+              "regex": "^[1-5]$",
+              "msg": "Введите оценку от 1 до 5"
+            }
+          },
+          {
+            "ask": "Напишите комментарий (необязательно)",
+            "var": "comment"
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "INSERT INTO feedback(bot_id, user_id, rating, comment, created_at) VALUES(:bot_id, :user_id, :rating, :comment, NOW())"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "🙏 Спасибо за отзыв!\n\n⭐ Оценка: {{rating}}/5\n💬 Комментарий: {{comment}}\n\n⏰ Следующий отзыв можно оставить через 5 минут."
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/status",
+      "params": {
+        "on_enter": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "chat",
+              "window_s": 60,
+              "allowance": 10,
+              "message": "💬 Слишком много запросов статуса в этом чате. Подождите {{retry_in}} сек."
+            }
+          },
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT service, to_char(slot,'YYYY-MM-DD HH24:MI') AS slot_time FROM bookings WHERE bot_id=:bot_id AND user_id=:user_id AND slot > NOW() ORDER BY slot LIMIT 3",
+              "result_var": "upcoming_bookings"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "📊 Ваш статус:\n\n📅 Ближайшие записи:\n{{#each upcoming_bookings}}• {{service}} - {{slot_time}}\n{{/each}}",
+              "empty_text": "📊 Ваш статус:\n\n📅 У вас нет предстоящих записей\n\n💡 Используйте /book для создания записи",
+              "keyboard": [
+                {"text": "📅 Новая запись", "callback": "/book"},
+                {"text": "📝 Оставить отзыв", "callback": "/feedback"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/admin_reset",
+      "params": {
+        "on_enter": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "bot",
+              "window_s": 3600,
+              "allowance": 5,
+              "key_suffix": "admin:reset",
+              "message": "🔒 Административные действия ограничены. Только 5 сбросов в час. Подождите {{retry_in}} сек."
+            }
+          },
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "DELETE FROM bookings WHERE bot_id=:bot_id AND created_at < NOW() - INTERVAL '7 days'"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "🗑️ Старые записи (7+ дней) удалены\n\n⏰ Ограничение: 5 сбросов в час"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/spam_test",
+      "params": {
+        "on_enter": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "user",
+              "window_s": 10,
+              "allowance": 1,
+              "key_suffix": "test",
+              "message": "🚫 Тест защиты от спама: 1 раз в 10 секунд. Осталось {{retry_in}} сек."
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "✅ Тест прошел! Защита от спама работает.\n\n⏰ Попробуйте снова через 10 секунд."
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -13,16 +13,18 @@ class EventsLogger:
         self.bot_id = bot_id
         self.user_id = user_id
 
-    async def log_event(self, event_type: str, data: Optional[Dict[str, Any]] = None):
+    async def log_event(self, event_type: str, data: Optional[Dict[str, Any]] = None,
+                      result_tag: Optional[Dict[str, Any]] = None):
         """Log event to bot_events table"""
         try:
-            # Prepare data with compact format
-            event_data = data or {}
+            # Prepare data with compact format and mask user input
+            from .logging_setup import mask_user_input_in_logs
+            event_data = mask_user_input_in_logs(data or {})
 
             # Insert event
             sql = """
-                INSERT INTO bot_events (bot_id, user_id, type, data)
-                VALUES (:bot_id, :user_id, :type, :data)
+                INSERT INTO bot_events (bot_id, user_id, type, data, result_tag)
+                VALUES (:bot_id, :user_id, :type, :data, :result_tag)
             """
 
             await self.session.execute(
@@ -31,7 +33,8 @@ class EventsLogger:
                     "bot_id": self.bot_id,
                     "user_id": self.user_id,
                     "type": event_type,
-                    "data": event_data
+                    "data": event_data,
+                    "result_tag": result_tag
                 }
             )
 
@@ -87,12 +90,28 @@ class EventsLogger:
 
         await self.log_event("action_sql", data)
 
-    async def log_action_reply(self, template_length: int, rendered_length: int):
+    async def log_action_reply(self, template_length: int, rendered_length: int,
+                             llm_result: Optional[Dict[str, Any]] = None):
         """Log reply action event"""
+        result_tag = None
+        if llm_result:
+            # Convert LLM decision info to result tag
+            if llm_result.get("ab_test"):
+                result_tag = {
+                    "llm": "yes" if llm_result["use_llm"] else "no",
+                    "variant": llm_result["variant"],
+                    "source": "ab_test"
+                }
+            else:
+                result_tag = {
+                    "llm": "yes" if llm_result["use_llm"] else "no",
+                    "source": llm_result.get("source", "explicit")
+                }
+
         await self.log_event("action_reply", {
             "template_length": template_length,
             "rendered_length": rendered_length
-        })
+        }, result_tag=result_tag)
 
     async def log_error(self, error_code: str, error_message: str, context: Optional[Dict[str, Any]] = None):
         """Log error event"""

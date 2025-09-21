@@ -1,0 +1,268 @@
+{
+  "use": [
+    "flow.wizard.v1",
+    "policy.ratelimit.v1",
+    "action.sql_exec.v1",
+    "action.sql_query.v1",
+    "action.reply_template.v1"
+  ],
+  "flows": [
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/premium_book",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT premium FROM users WHERE bot_id=:bot_id AND user_id=:user_id",
+              "result_var": "user_info",
+              "scalar": true
+            }
+          }
+        ],
+        "steps": [
+          {
+            "ask": "Выберите премиум услугу: vip/deluxe/exclusive",
+            "var": "premium_service",
+            "validate": {
+              "regex": "^(vip|deluxe|exclusive)$",
+              "msg": "Выберите: vip, deluxe, exclusive"
+            }
+          }
+        ],
+        "on_step": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "user",
+              "window_s": 3600,
+              "allowance": 3,
+              "key_suffix": "premium:{{premium_service}}:{{user_info}}",
+              "message": "💎 Премиум услуга {{premium_service}} ограничена: {{allowance}} раз в час для вашего статуса {{user_info}}. Подождите {{retry_in}} сек."
+            }
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "INSERT INTO premium_bookings(bot_id, user_id, service, created_at) VALUES(:bot_id, :user_id, :premium_service, NOW())"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "✨ Премиум услуга {{premium_service}} забронирована!\n\n💎 Статус: {{user_info}}\n⏰ Лимит: 3 раза в час"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/support",
+      "params": {
+        "steps": [
+          {
+            "ask": "Тип проблемы: tech/billing/general",
+            "var": "issue_type",
+            "validate": {
+              "regex": "^(tech|billing|general)$",
+              "msg": "Выберите: tech, billing, general"
+            }
+          },
+          {
+            "ask": "Опишите проблему",
+            "var": "description"
+          }
+        ],
+        "on_step": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "user",
+              "window_s": 600,
+              "allowance": 2,
+              "key_suffix": "support:{{issue_type}}",
+              "message": "🎧 Лимит обращений в поддержку по типу {{issue_type}}: 2 раза в 10 минут. Подождите {{retry_in}} сек."
+            }
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "INSERT INTO support_tickets(bot_id, user_id, issue_type, description, status, created_at) VALUES(:bot_id, :user_id, :issue_type, :description, 'open', NOW())"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "🎫 Тикет создан!\n\n📋 Тип: {{issue_type}}\n📝 Описание: {{description}}\n\n⏰ Лимит: 2 обращения по типу {{issue_type}} в 10 минут"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/bulk_action",
+      "params": {
+        "on_enter": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "chat",
+              "window_s": 300,
+              "allowance": 1,
+              "message": "🔄 Массовые операции в чате ограничены: 1 раз в 5 минут. Подождите {{retry_in}} сек."
+            }
+          }
+        ],
+        "steps": [
+          {
+            "ask": "Количество элементов для обработки (1-100)",
+            "var": "count",
+            "validate": {
+              "regex": "^([1-9][0-9]?|100)$",
+              "msg": "Введите число от 1 до 100"
+            }
+          }
+        ],
+        "on_step": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "user",
+              "window_s": 60,
+              "allowance": 10,
+              "key_suffix": "bulk:items:{{count}}",
+              "message": "⚡ Лимит по количеству {{count}} элементов: 10 операций в минуту. Подождите {{retry_in}} сек."
+            }
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "✅ Обработано {{count}} элементов\n\n⏰ Лимиты:\n• Чат: 1 массовая операция в 5 мин\n• Пользователь: 10 операций по {{count}} элементов в минуту"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/api_call",
+      "params": {
+        "steps": [
+          {
+            "ask": "API endpoint: users/orders/products",
+            "var": "endpoint",
+            "validate": {
+              "regex": "^(users|orders|products)$",
+              "msg": "Выберите: users, orders, products"
+            }
+          },
+          {
+            "ask": "Метод: GET/POST/PUT/DELETE",
+            "var": "method",
+            "validate": {
+              "regex": "^(GET|POST|PUT|DELETE)$",
+              "msg": "Выберите: GET, POST, PUT, DELETE"
+            }
+          }
+        ],
+        "on_step": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "user",
+              "window_s": 60,
+              "allowance": 5,
+              "key_suffix": "api:{{endpoint}}:{{method}}",
+              "message": "🌐 API лимит для {{method}} {{endpoint}}: 5 запросов в минуту. Подождите {{retry_in}} сек."
+            }
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "INSERT INTO api_calls(bot_id, user_id, endpoint, method, created_at) VALUES(:bot_id, :user_id, :endpoint, :method, NOW())"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "🚀 API вызов выполнен!\n\n🎯 Endpoint: {{endpoint}}\n⚡ Метод: {{method}}\n\n⏰ Лимит: 5 {{method}} запросов к {{endpoint}} в минуту"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/emergency",
+      "params": {
+        "on_enter": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "bot",
+              "window_s": 86400,
+              "allowance": 10,
+              "key_suffix": "emergency",
+              "message": "🚨 Экстренные запросы ограничены: 10 раз в день для всего бота. Подождите {{retry_in}} сек."
+            }
+          }
+        ],
+        "steps": [
+          {
+            "ask": "Опишите экстренную ситуацию",
+            "var": "emergency_description"
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "INSERT INTO emergency_requests(bot_id, user_id, description, created_at) VALUES(:bot_id, :user_id, :emergency_description, NOW())"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "🚨 ЭКСТРЕННЫЙ ЗАПРОС ЗАРЕГИСТРИРОВАН\n\n📝 Описание: {{emergency_description}}\n\n⚠️ Администрация уведомлена\n⏰ Лимит: 10 экстренных запросов в день"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/rate_test",
+      "params": {
+        "on_enter": [
+          {
+            "type": "policy.ratelimit.v1",
+            "params": {
+              "scope": "user",
+              "window_s": 5,
+              "allowance": 1,
+              "key_suffix": "test:rapid",
+              "message": "⚡ Тест: 1 запрос в 5 секунд. {{retry_in}} сек до следующего."
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "✅ Быстрый тест прошел!\n\n⏱️ Попробуйте снова через 5 секунд для проверки rate limiting"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

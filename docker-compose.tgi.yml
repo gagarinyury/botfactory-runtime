@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  tgi:
+    image: ghcr.io/huggingface/text-generation-inference:2.0
+    container_name: botfactory-tgi
+    ports:
+      - "8080:8080"
+      - "3000:3000"  # Metrics port
+    environment:
+      # Load from tgi.env file
+      - MODEL_ID=${MODEL_ID:-microsoft/Phi-3-mini-4k-instruct}
+      - REVISION=${REVISION:-main}
+
+      # Performance parameters
+      - MAX_CONCURRENT_REQUESTS=${MAX_CONCURRENT_REQUESTS:-32}
+      - MAX_BEST_OF=${MAX_BEST_OF:-2}
+      - MAX_STOP_SEQUENCES=${MAX_STOP_SEQUENCES:-4}
+      - MAX_INPUT_TOKENS=${MAX_INPUT_TOKENS:-8192}
+      - MAX_TOTAL_TOKENS=${MAX_TOTAL_TOKENS:-16384}
+      - MAX_BATCH_PREFILL_TOKENS=${MAX_BATCH_PREFILL_TOKENS:-8192}
+      - MAX_BATCH_TOTAL_TOKENS=${MAX_BATCH_TOTAL_TOKENS:-65536}
+
+      # Memory settings
+      - CUDA_MEMORY_FRACTION=${CUDA_MEMORY_FRACTION:-0.9}
+      - TRUST_REMOTE_CODE=${TRUST_REMOTE_CODE:-true}
+
+      # Network settings
+      - PORT=8080
+      - HOSTNAME=0.0.0.0
+      - SHARD=${SHARD:-false}
+      - NUM_SHARD=${NUM_SHARD:-1}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - JSON_OUTPUT=${JSON_OUTPUT:-true}
+
+      # CORS and monitoring
+      - CORS_ALLOW_ORIGIN=${CORS_ALLOW_ORIGIN:-*}
+      - METRICS_PORT=3000
+
+      # Advanced performance
+      - MAX_WAITING_TOKENS=${MAX_WAITING_TOKENS:-20}
+      - WAITING_SERVED_RATIO=${WAITING_SERVED_RATIO:-1.2}
+      - MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-32}
+      - PREFILL_CHUNKING=${PREFILL_CHUNKING:-true}
+      - SPECULATIVE_TOKENS=${SPECULATIVE_TOKENS:-0}
+
+      # Watermarking (optional)
+      - WATERMARK_GAMMA=${WATERMARK_GAMMA:-0.5}
+      - WATERMARK_DELTA=${WATERMARK_DELTA:-2.0}
+
+    volumes:
+      # Cache model downloads
+      - tgi_models:/data
+      # Optional: custom HF cache location
+      - ~/.cache/huggingface:/root/.cache/huggingface
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Optional: Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: botfactory-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+volumes:
+  tgi_models:
+    driver: local
+  prometheus_data:
+    driver: local
+
+networks:
+  default:
+    name: botfactory-network

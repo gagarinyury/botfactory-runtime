@@ -143,6 +143,19 @@ async def handle_callback(bot_id: str, user_id: int, callback_data: str) -> Any:
             if result:
                 return result
 
+        # Check if this is a pagination callback
+        if callback_data.startswith("pg:"):
+            from .pagination_widget import pagination_widget
+            result = await pagination_widget.handle_callback(bot_id, user_id, callback_data, session)
+            if result:
+                # Handle pagination navigation
+                if result.get("type") == "navigation":
+                    return await wizard_engine.handle_pagination_navigation(bot_id, user_id, result, session)
+                # Handle item selection
+                elif result.get("type") == "synthetic_input":
+                    return await wizard_engine.handle_pagination_selection(bot_id, user_id, result, session)
+                return result
+
         # Add other callback handlers here as needed
         logger.warning("unhandled_callback", bot_id=bot_id, user_id=user_id, callback=callback_data)
         return None
@@ -167,7 +180,8 @@ async def handle(bot_id: str, text: str) -> str:
             user_id = _user_context.get()
 
             if user_id is None:
-                logger.warning("no_user_context", bot_id=bot_id, text=text)
+                from .logging_setup import mask_user_text
+                logger.warning("no_user_context", bot_id=bot_id, text=mask_user_text(text))
                 # For testing/preview, use a default user_id
                 user_id = 999999  # Clear test user ID
 

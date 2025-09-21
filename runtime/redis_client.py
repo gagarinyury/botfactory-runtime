@@ -71,5 +71,91 @@ class RedisClient:
         except Exception as e:
             logger.error("wizard_state_ttl_extend_failed", key=key, error=str(e))
 
+    # Budget management methods
+    async def get_daily_budget_usage(self, bot_id: str) -> int:
+        """Get current daily budget usage for bot (in tokens)"""
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        key = f"budget:daily:{bot_id}:{today}"
+        try:
+            usage = await self.redis.get(key)
+            return int(usage) if usage else 0
+        except Exception as e:
+            logger.error("budget_usage_get_failed", bot_id=bot_id, error=str(e))
+            return 0
+
+    async def increment_daily_budget_usage(self, bot_id: str, tokens: int) -> int:
+        """Increment daily budget usage and return new total"""
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        key = f"budget:daily:{bot_id}:{today}"
+        try:
+            # Increment with atomic operation
+            new_total = await self.redis.incr(key, tokens)
+
+            # Set expiry for midnight of next day if this is first increment today
+            if new_total == tokens:
+                # Calculate seconds until midnight
+                from datetime import datetime, timedelta
+                now = datetime.now()
+                tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                seconds_until_midnight = int((tomorrow - now).total_seconds())
+                await self.redis.expire(key, seconds_until_midnight)
+
+            logger.debug("budget_usage_incremented",
+                        bot_id=bot_id, tokens=tokens, new_total=new_total)
+            return new_total
+        except Exception as e:
+            logger.error("budget_usage_increment_failed",
+                        bot_id=bot_id, tokens=tokens, error=str(e))
+            raise
+
+    async def check_budget_limit(self, bot_id: str, daily_limit: int) -> bool:
+        """Check if bot is within daily budget limit"""
+        try:
+            current_usage = await self.get_daily_budget_usage(bot_id)
+            within_limit = current_usage < daily_limit
+
+            logger.debug("budget_limit_checked",
+                        bot_id=bot_id,
+                        current_usage=current_usage,
+                        daily_limit=daily_limit,
+                        within_limit=within_limit)
+
+            return within_limit
+        except Exception as e:
+            logger.error("budget_limit_check_failed", bot_id=bot_id, error=str(e))
+            # Fail safe: allow operation if we can't check budget
+            return True
+
+    async def reset_daily_budget(self, bot_id: str):
+        """Reset daily budget for bot (admin operation)"""
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        key = f"budget:daily:{bot_id}:{today}"
+        try:
+            await self.redis.delete(key)
+            logger.info("budget_reset", bot_id=bot_id, date=today)
+        except Exception as e:
+            logger.error("budget_reset_failed", bot_id=bot_id, error=str(e))
+
+    async def get_budget_stats(self, bot_id: str, days: int = 7) -> Dict[str, int]:
+        """Get budget usage stats for last N days"""
+        from datetime import datetime, timedelta
+        stats = {}
+
+        try:
+            for i in range(days):
+                date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+                key = f"budget:daily:{bot_id}:{date}"
+                usage = await self.redis.get(key)
+                stats[date] = int(usage) if usage else 0
+
+            logger.debug("budget_stats_retrieved", bot_id=bot_id, days=days)
+            return stats
+        except Exception as e:
+            logger.error("budget_stats_get_failed", bot_id=bot_id, error=str(e))
+            return {}
+
 # Global Redis client instance
 redis_client = RedisClient()

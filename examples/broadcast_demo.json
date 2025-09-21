@@ -1,0 +1,196 @@
+{
+  "use": [
+    "flow.wizard.v1",
+    "action.sql_exec.v1",
+    "action.sql_query.v1",
+    "action.reply_template.v1",
+    "ops.broadcast.v1"
+  ],
+  "intents": [
+    {"cmd": "/start", "reply": "Добро пожаловать! Команды: /promo, /send_newsletter, /user_stats"}
+  ],
+  "flows": [
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/promo",
+      "params": {
+        "steps": [
+          {
+            "ask": "Какая скидка? (введите число от 5 до 50)",
+            "var": "discount",
+            "validate": {
+              "regex": "^([5-9]|[1-4][0-9]|50)$",
+              "msg": "Скидка должна быть от 5 до 50 процентов"
+            }
+          },
+          {
+            "ask": "Кому отправить? (all/active_7d/segment:vip_users)",
+            "var": "audience",
+            "validate": {
+              "regex": "^(all|active_7d|segment:[a-zA-Z0-9_]+)$",
+              "msg": "Аудитория: all, active_7d или segment:имя_сегмента"
+            }
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "ops.broadcast.v1",
+            "params": {
+              "audience": "{{audience}}",
+              "message": "t:broadcast.promo {discount={{discount}}}",
+              "throttle": {"per_sec": 25},
+              "track_metrics": true
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "✅ Рассылка запущена!\n\nАудитория: {{audience}}\nСкидка: {{discount}}%\n\nСтатус можно проверить в админке."
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/send_newsletter",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT COUNT(*) as active_users FROM bot_users WHERE bot_id=:bot_id AND is_active=true AND last_active >= NOW() - INTERVAL '7 days'",
+              "result_var": "stats",
+              "scalar": true
+            }
+          }
+        ],
+        "steps": [
+          {
+            "ask": "Текст рассылки:",
+            "var": "newsletter_text"
+          },
+          {
+            "ask": "Скорость отправки (сообщений в секунду, 1-50):",
+            "var": "send_rate",
+            "validate": {
+              "regex": "^([1-9]|[1-4][0-9]|50)$",
+              "msg": "Скорость должна быть от 1 до 50 сообщений в секунду"
+            }
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "ops.broadcast.v1",
+            "params": {
+              "audience": "active_7d",
+              "message": "{{newsletter_text}}",
+              "throttle": {"per_sec": "{{send_rate}}"}
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "📨 Рассылка отправляется!\n\nАктивных пользователей: {{stats}}\nТекст: {{newsletter_text}}\nСкорость: {{send_rate}} сообщений/сек"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/user_stats",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT COUNT(*) as total FROM bot_users WHERE bot_id=:bot_id AND is_active=true",
+              "result_var": "total_users",
+              "scalar": true
+            }
+          },
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT COUNT(*) as active FROM bot_users WHERE bot_id=:bot_id AND is_active=true AND last_active >= NOW() - INTERVAL '7 days'",
+              "result_var": "active_7d",
+              "scalar": true
+            }
+          },
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT COUNT(*) as vip FROM bot_users WHERE bot_id=:bot_id AND is_active=true AND 'vip_users' = ANY(segment_tags)",
+              "result_var": "vip_count",
+              "scalar": true
+            }
+          },
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT status, COUNT(*) as count FROM broadcasts WHERE bot_id=:bot_id AND created_at >= NOW() - INTERVAL '30 days' GROUP BY status ORDER BY status",
+              "result_var": "broadcast_stats"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "📊 Статистика пользователей:\n\n👥 Всего активных: {{total_users}}\n🔥 Активных за 7 дней: {{active_7d}}\n⭐ VIP пользователей: {{vip_count}}\n\n📨 Рассылки за 30 дней:\n{{#each broadcast_stats}}• {{status}}: {{count}}\n{{/each}}",
+              "empty_text": "📊 Статистика пользователей:\n\n👥 Всего активных: {{total_users}}\n🔥 Активных за 7 дней: {{active_7d}}\n⭐ VIP пользователей: {{vip_count}}\n\n📨 Рассылок за 30 дней не было",
+              "keyboard": [
+                {"text": "📨 Отправить рассылку", "callback": "/send_newsletter"},
+                {"text": "🎁 Промо-акция", "callback": "/promo"},
+                {"text": "🔙 Главная", "callback": "/start"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/segment_promo",
+      "params": {
+        "steps": [
+          {
+            "ask": "Имя сегмента (например: premium_users, new_customers):",
+            "var": "segment_name",
+            "validate": {
+              "regex": "^[a-zA-Z0-9_]+$",
+              "msg": "Имя сегмента: только буквы, цифры и подчеркивание"
+            }
+          },
+          {
+            "ask": "Персонализированное сообщение:",
+            "var": "personal_message"
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT COUNT(*) as segment_size FROM bot_users WHERE bot_id=:bot_id AND is_active=true AND :segment_name = ANY(segment_tags)",
+              "result_var": "segment_size",
+              "scalar": true
+            }
+          },
+          {
+            "type": "ops.broadcast.v1",
+            "params": {
+              "audience": "segment:{{segment_name}}",
+              "message": "t:broadcast.personal {message={{personal_message}}}",
+              "throttle": {"per_sec": 20}
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "🎯 Персональная рассылка запущена!\n\nСегмент: {{segment_name}}\nПользователей: {{segment_size}}\nСообщение: {{personal_message}}"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

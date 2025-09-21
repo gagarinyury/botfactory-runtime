@@ -1,0 +1,155 @@
+{
+  "use": [
+    "flow.wizard.v1",
+    "i18n.fluent.v1",
+    "action.sql_exec.v1",
+    "action.sql_query.v1",
+    "action.reply_template.v1"
+  ],
+  "i18n": {
+    "default_locale": "ru",
+    "supported": ["ru", "en"],
+    "strategy": "user",
+    "autoload_keys": true
+  },
+  "intents": [
+    {"cmd": "/start", "reply": "t:welcome"},
+    {"cmd": "/help", "reply": "t:help_message"},
+    {"cmd": "/lang", "reply": "t:lang_selector"}
+  ],
+  "flows": [
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/register",
+      "params": {
+        "steps": [
+          {
+            "ask": "t:enter_name",
+            "var": "name",
+            "validate": {
+              "regex": "^[A-Za-zА-Яа-я\\s]{2,50}$",
+              "msg": "t:invalid_name"
+            }
+          },
+          {
+            "ask": "t:enter_age",
+            "var": "age",
+            "validate": {
+              "regex": "^\\d{1,3}$",
+              "msg": "t:invalid_age"
+            }
+          },
+          {
+            "ask": "t:enter_email",
+            "var": "email",
+            "validate": {
+              "regex": "^[\\w\\.-]+@[\\w\\.-]+\\.[a-z]{2,}$",
+              "msg": "t:invalid_email"
+            }
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "INSERT INTO users(bot_id, user_id, name, age, email, created_at) VALUES(:bot_id, :user_id, :name, :age, :email, NOW())"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "t:registration_complete {name={{name}}, age={{age}}}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/profile",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT name, age, email, to_char(created_at,'YYYY-MM-DD') as joined FROM users WHERE bot_id=:bot_id AND user_id=:user_id",
+              "result_var": "user_info",
+              "scalar": false
+            }
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "t:profile_info {{#each user_info}}name={{name}}, age={{age}}, email={{email}}, joined={{joined}}{{/each}}",
+              "empty_text": "t:profile_not_found",
+              "keyboard": [
+                {"text": "t:edit_profile", "callback": "/edit_profile"},
+                {"text": "t:back_to_menu", "callback": "/start"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/survey",
+      "params": {
+        "steps": [
+          {
+            "ask": "t:rate_service",
+            "var": "rating",
+            "validate": {
+              "regex": "^[1-5]$",
+              "msg": "t:invalid_rating"
+            }
+          },
+          {
+            "ask": "t:leave_feedback",
+            "var": "feedback"
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "INSERT INTO feedback(bot_id, user_id, rating, comment, created_at) VALUES(:bot_id, :user_id, :rating, :feedback, NOW())"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "t:feedback_thanks {rating={{rating}}}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/stats",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT COUNT(*) as total_users, AVG(rating) as avg_rating FROM (SELECT DISTINCT user_id FROM users WHERE bot_id=:bot_id) u LEFT JOIN feedback f ON u.user_id = f.user_id AND f.bot_id=:bot_id",
+              "result_var": "stats",
+              "scalar": false
+            }
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "t:statistics {{#each stats}}total={{total_users}}, average_rating={{avg_rating}}{{/each}}"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

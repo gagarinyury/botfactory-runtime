@@ -1,0 +1,257 @@
+{
+  "use": [
+    "flow.wizard.v1",
+    "action.sql_exec.v1",
+    "action.sql_query.v1",
+    "action.reply_template.v1",
+    "widget.pagination.v1"
+  ],
+  "intents": [
+    {
+      "cmd": "/start",
+      "reply": "Добро пожаловать в умного бота! 🤖"
+    }
+  ],
+  "flows": [
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/book",
+      "params": {
+        "steps": [
+          {
+            "ask": "Какую услугу вы хотите забронировать?",
+            "var": "service_name"
+          },
+          {
+            "ask": "На какую дату и время? (формат: YYYY-MM-DD HH:MM)",
+            "var": "slot",
+            "validate": {
+              "regex": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$",
+              "msg": "Пожалуйста, используйте формат YYYY-MM-DD HH:MM, например: 2025-01-15 14:00"
+            }
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "INSERT INTO bookings(bot_id, user_id, service_name, slot, created_at) VALUES(:bot_id, :user_id, :service_name, :slot::timestamptz, NOW())"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "Ваша запись создана: {{service_name}} на {{slot}}",
+              "llm_improve": true,
+              "keyboard": [
+                {"text": "📋 Мои записи", "callback": "/my"},
+                {"text": "🏠 Главная", "callback": "/start"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/my",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT id, service_name, to_char(slot,'YYYY-MM-DD HH24:MI') AS slot_time FROM bookings WHERE bot_id=:bot_id AND user_id=:user_id AND slot > NOW() ORDER BY slot",
+              "result_var": "user_bookings"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "widget": {
+              "type": "widget.pagination.v1",
+              "params": {
+                "source": {
+                  "type": "ctx",
+                  "ctx_var": "user_bookings"
+                },
+                "page_size": 5,
+                "item_template": "{{service_name}} - {{slot_time}}",
+                "select_callback": "/booking_details",
+                "id_field": "id",
+                "title": "Ваши записи:",
+                "empty_text": "У вас пока нет записей",
+                "extra_keyboard": [
+                  {"text": "📅 Новая запись", "callback": "/book"},
+                  {"text": "🏠 Главная", "callback": "/start"}
+                ]
+              }
+            },
+            "var": "selected_booking_id"
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT service_name, to_char(slot,'YYYY-MM-DD HH24:MI') AS slot_time FROM bookings WHERE id=:selected_booking_id AND bot_id=:bot_id AND user_id=:user_id",
+              "result_var": "booking_details",
+              "scalar": false
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "Детали записи:\\n{{#each booking_details}}Услуга: {{service_name}}\\nВремя: {{slot_time}}{{/each}}",
+              "llm_improve": true,
+              "keyboard": [
+                {"text": "❌ Отменить запись", "callback": "/cancel"},
+                {"text": "📋 К списку", "callback": "/my"},
+                {"text": "🏠 Главная", "callback": "/start"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/services",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT id, name, description, price FROM services WHERE bot_id=:bot_id AND active=true ORDER BY name LIMIT :limit OFFSET :offset",
+              "result_var": "available_services"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "widget": {
+              "type": "widget.pagination.v1",
+              "params": {
+                "source": {
+                  "type": "ctx",
+                  "ctx_var": "available_services"
+                },
+                "page_size": 4,
+                "item_template": "{{name}} - {{price}}₽",
+                "select_callback": "/service_info",
+                "id_field": "id",
+                "title": "Доступные услуги:",
+                "empty_text": "Услуги временно недоступны",
+                "extra_keyboard": [
+                  {"text": "📅 Записаться", "callback": "/book"},
+                  {"text": "🏠 Главная", "callback": "/start"}
+                ]
+              }
+            },
+            "var": "selected_service_id"
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT name, description, price FROM services WHERE id=:selected_service_id AND bot_id=:bot_id",
+              "result_var": "service_info",
+              "scalar": false
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "{{#each service_info}}🔸 {{name}}\\n{{description}}\\nЦена: {{price}}₽{{/each}}",
+              "llm_improve": true,
+              "keyboard": [
+                {"text": "📅 Записаться на эту услугу", "callback": "/book"},
+                {"text": "📋 Все услуги", "callback": "/services"},
+                {"text": "🏠 Главная", "callback": "/start"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/help",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "Я помогу вам с записью на услуги. Доступные команды:\\n/book - записаться\\n/my - мои записи\\n/services - список услуг\\n/help - помощь",
+              "llm_improve": true,
+              "keyboard": [
+                {"text": "📅 Записаться", "callback": "/book"},
+                {"text": "📋 Мои записи", "callback": "/my"},
+                {"text": "🔧 Услуги", "callback": "/services"},
+                {"text": "🏠 Главная", "callback": "/start"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/cancel",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT id, service_name, to_char(slot,'YYYY-MM-DD HH24:MI') AS slot_time FROM bookings WHERE bot_id=:bot_id AND user_id=:user_id AND slot > NOW() ORDER BY slot",
+              "result_var": "cancellable_bookings"
+            }
+          }
+        ],
+        "steps": [
+          {
+            "widget": {
+              "type": "widget.pagination.v1",
+              "params": {
+                "source": {
+                  "type": "ctx",
+                  "ctx_var": "cancellable_bookings"
+                },
+                "page_size": 5,
+                "item_template": "{{service_name}} - {{slot_time}}",
+                "select_callback": "/confirm_cancel",
+                "id_field": "id",
+                "title": "Какую запись отменить?",
+                "empty_text": "Нет записей для отмены",
+                "extra_keyboard": [
+                  {"text": "🔙 Назад", "callback": "/my"}
+                ]
+              }
+            },
+            "var": "cancel_booking_id"
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.sql_exec.v1",
+            "params": {
+              "sql": "DELETE FROM bookings WHERE id=:cancel_booking_id AND bot_id=:bot_id AND user_id=:user_id"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "Запись отменена",
+              "llm_improve": true,
+              "keyboard": [
+                {"text": "📅 Новая запись", "callback": "/book"},
+                {"text": "📋 Мои записи", "callback": "/my"},
+                {"text": "🏠 Главная", "callback": "/start"}
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

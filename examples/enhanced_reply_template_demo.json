@@ -1,0 +1,239 @@
+{
+  "use": [
+    "flow.wizard.v1",
+    "action.sql_query.v1",
+    "action.reply_template.v1"
+  ],
+  "intents": [
+    {"cmd": "/start", "reply": "Добро пожаловать! Доступные команды: /menu, /profile, /orders"}
+  ],
+  "flows": [
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/menu",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "🏠 <b>Главное меню</b>\n\nВыберите действие из списка ниже:",
+              "parse_mode": "HTML",
+              "keyboard": [
+                [
+                  {"text": "👤 Профиль", "callback": "/profile"},
+                  {"text": "📦 Заказы", "callback": "/orders"}
+                ],
+                [
+                  {"text": "🛒 Каталог", "callback": "/catalog"},
+                  {"text": "💬 Поддержка", "callback": "/support"}
+                ],
+                {"text": "ℹ️ О компании", "callback": "/about"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/profile",
+      "params": {
+        "steps": [
+          {
+            "ask": "Как вас зовут?",
+            "var": "username"
+          }
+        ],
+        "on_complete": [
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "t:profile.greeting {name={{username}}}",
+              "parse_mode": "MarkdownV2",
+              "keyboard": [
+                [
+                  {"text": "✏️ Изменить имя", "callback": "/edit_name"},
+                  {"text": "🔙 В меню", "callback": "/menu"}
+                ]
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/orders",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT id, product_name, to_char(created_at,'YYYY-MM-DD') AS order_date, status, total_amount FROM orders WHERE bot_id=:bot_id AND user_id=:user_id ORDER BY created_at DESC LIMIT 10",
+              "result_var": "user_orders"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "📦 *Ваши заказы:*\n\n{{#each user_orders}}📋 *Заказ #{{id}}*\n• {{product_name}}\n• {{order_date}} \\| {{status}}\n• {{total_amount}}₽\n\n{{/each}}",
+              "empty_text": "📭 *У вас пока нет заказов*\n\nВы можете оформить первый заказ в нашем каталоге\\!",
+              "parse_mode": "MarkdownV2",
+              "keyboard": [
+                [
+                  {"text": "🛒 Перейти к покупкам", "callback": "/catalog"},
+                  {"text": "🔍 Поиск заказа", "callback": "/search_order"}
+                ],
+                {"text": "🔙 Назад в меню", "callback": "/menu"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/catalog",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT id, name, price, category, in_stock FROM products WHERE bot_id=:bot_id AND active=true ORDER BY category, name LIMIT 20",
+              "result_var": "products"
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "🛒 <b>Каталог товаров</b>\n\n{{#each products}}🏷️ <b>{{name}}</b>\n💰 {{price}}₽ | 📂 {{category}}\n{{#if in_stock}}✅ В наличии{{else}}❌ Нет в наличии{{/if}}\n\n{{/each}}",
+              "empty_text": "🚫 <b>Каталог временно пуст</b>\n\nМы работаем над добавлением новых товаров.",
+              "parse_mode": "HTML",
+              "keyboard": [
+                [
+                  {"text": "📱 Электроника", "callback": "cat:electronics"},
+                  {"text": "👕 Одежда", "callback": "cat:clothing"}
+                ],
+                [
+                  {"text": "📚 Книги", "callback": "cat:books"},
+                  {"text": "🏠 Для дома", "callback": "cat:home"}
+                ],
+                [
+                  {"text": "🔍 Поиск", "callback": "/search"},
+                  {"text": "🛍️ Корзина", "callback": "/cart"}
+                ],
+                {"text": "🔙 Назад", "callback": "/menu"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/support",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "💬 <b>Служба поддержки</b>\n\n<i>Мы готовы помочь вам 24/7!</i>\n\nВыберите способ связи:",
+              "parse_mode": "HTML",
+              "keyboard": [
+                [
+                  {"text": "📞 Позвонить", "callback": "support:call"},
+                  {"text": "✉️ Email", "callback": "support:email"}
+                ],
+                [
+                  {"text": "💬 Чат", "callback": "support:chat"},
+                  {"text": "❓ FAQ", "callback": "support:faq"}
+                ],
+                {"text": "🔙 Назад", "callback": "/menu"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/about",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.sql_query.v1",
+            "params": {
+              "sql": "SELECT COUNT(*) as total_users, COUNT(DISTINCT DATE(created_at)) as active_days FROM users WHERE bot_id=:bot_id",
+              "result_var": "stats",
+              "scalar": false
+            }
+          },
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "ℹ️ *О нашей компании*\n\n🏢 *BotFactory Ltd\\.*\n📍 Москва, Россия\n📅 Основана в 2024 году\n\n📊 *Наша статистика:*\n{{#each stats}}👥 Пользователей: {{total_users}}\n📈 Активных дней: {{active_days}}{{/each}}\n\n🎯 *Миссия:* Создавать лучшие боты для вашего бизнеса\\!\n\n💼 *Услуги:*\n• Разработка чат\\-ботов\n• Интеграция с CRM\n• Техническая поддержка\n• Консультации по автоматизации",
+              "parse_mode": "MarkdownV2",
+              "keyboard": [
+                [
+                  {"text": "🌐 Сайт", "callback": "link:website"},
+                  {"text": "📧 Контакты", "callback": "link:contacts"}
+                ],
+                [
+                  {"text": "💼 Услуги", "callback": "/services"},
+                  {"text": "📋 Портфолио", "callback": "/portfolio"}
+                ],
+                {"text": "🔙 В главное меню", "callback": "/menu"}
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "flow.wizard.v1",
+      "entry_cmd": "/calculator",
+      "params": {
+        "on_enter": [
+          {
+            "type": "action.reply_template.v1",
+            "params": {
+              "text": "🧮 *Калькулятор*\n\nВведите выражение или используйте кнопки:",
+              "parse_mode": "MarkdownV2",
+              "keyboard": [
+                [
+                  {"text": "7", "callback": "calc:7"},
+                  {"text": "8", "callback": "calc:8"},
+                  {"text": "9", "callback": "calc:9"},
+                  {"text": "÷", "callback": "calc:div"}
+                ],
+                [
+                  {"text": "4", "callback": "calc:4"},
+                  {"text": "5", "callback": "calc:5"},
+                  {"text": "6", "callback": "calc:6"},
+                  {"text": "×", "callback": "calc:mul"}
+                ],
+                [
+                  {"text": "1", "callback": "calc:1"},
+                  {"text": "2", "callback": "calc:2"},
+                  {"text": "3", "callback": "calc:3"},
+                  {"text": "+", "callback": "calc:add"}
+                ],
+                [
+                  {"text": "0", "callback": "calc:0"},
+                  {"text": ".", "callback": "calc:dot"},
+                  {"text": "=", "callback": "calc:equals"},
+                  {"text": "−", "callback": "calc:sub"}
+                ],
+                [
+                  {"text": "🗑️ Очистить", "callback": "calc:clear"},
+                  {"text": "⌫ Удалить", "callback": "calc:backspace"}
+                ],
+                {"text": "🔙 Выход", "callback": "/menu"}
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

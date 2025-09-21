@@ -98,6 +98,44 @@ class WizardFlow(BaseModel):
     entry_cmd: str
     params: Dict[str, Any]
 
+# Broadcast system schemas
+class BroadcastThrottle(BaseModel):
+    per_sec: int = 30
+
+class BroadcastMessage(BaseModel):
+    template: str  # i18n template key like "t:broadcast.promo"
+    variables: Dict[str, Any] = {}
+
+class BroadcastParams(BaseModel):
+    audience: str  # "all", "active_7d", "segment:tag_name"
+    message: Union[str, BroadcastMessage]  # Simple string or template object
+    throttle: BroadcastThrottle = BroadcastThrottle()
+    track_metrics: bool = True
+
+class BroadcastRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    audience: str
+    message: Union[str, Dict[str, Any]]
+    throttle: Optional[Dict[str, Any]] = None
+
+    @field_validator('audience')
+    @classmethod
+    def validate_audience(cls, v):
+        if not v.strip():
+            raise ValueError('audience cannot be empty')
+        # Validate audience format
+        if v not in ['all', 'active_7d'] and not v.startswith('segment:'):
+            raise ValueError('audience must be "all", "active_7d", or "segment:tag_name"')
+        return v.strip()
+
+class BroadcastResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    broadcast_id: str
+    status: str
+    message: str
+
 class CalendarWidget(BaseModel):
     type: str
     params: Dict[str, Any]

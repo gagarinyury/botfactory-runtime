@@ -59,12 +59,18 @@ class WizardEngine:
                     await events_logger.log_error("wizard_on_enter", str(result))
                     return "Произошла ошибка при запуске."
 
+                # Check if action was blocked by rate limit
+                if result.get("blocked", False):
+                    await redis_client.delete_wizard_state(bot_id, user_id)
+                    return result.get("text", "Действие заблокировано")
+
                 # If this is a reply template action, return immediately
                 if result.get("type") == "reply":
                     await redis_client.delete_wizard_state(bot_id, user_id)
                     await events_logger.log_action_reply(
                         result.get("template_length", 0),
-                        len(result["text"])
+                        len(result["text"]),
+                        result.get("llm_decision")  # Pass LLM decision for result tagging
                     )
                     # Return structured response for keyboard handling
                     return self._format_response(result)
@@ -120,6 +126,10 @@ class WizardEngine:
                 if not result.get("success", False):
                     logger.error("wizard_on_step_failed", result=result)
 
+                # Check if action was blocked by rate limit
+                if result.get("blocked", False):
+                    return result.get("text", "Действие заблокировано")
+
         # Move to next step
         next_step = current_step + 1
 
@@ -155,6 +165,10 @@ class WizardEngine:
                 if not result.get("success", False):
                     logger.error("wizard_on_complete_failed", result=result)
                     return "Произошла ошибка при завершении."
+
+                # Check if action was blocked by rate limit
+                if result.get("blocked", False):
+                    return result.get("text", "Действие заблокировано")
 
                 # If this is a reply template action, use its response as final response
                 if result.get("type") == "reply":
@@ -231,7 +245,8 @@ class WizardEngine:
                     await redis_client.delete_wizard_state(bot_id, user_id)
                     await events_logger.log_action_reply(
                         result.get("template_length", 0),
-                        len(result["text"])
+                        len(result["text"]),
+                        result.get("llm_decision")  # Pass LLM decision for result tagging
                     )
                     return self._format_response(result)
 
@@ -406,6 +421,14 @@ class WizardEngine:
         if widget_type == "widget.calendar.v1":
             from .calendar_widget import calendar_widget
             return await calendar_widget.render_calendar(bot_id, user_id, widget_config["params"])
+        elif widget_type == "widget.pagination.v1":
+            from .pagination_widget import pagination_widget
+            # Get current wizard state for context variables
+            wizard_state = await redis_client.get_wizard_state(bot_id, user_id)
+            context_vars = wizard_state.get("vars", {}) if wizard_state else {}
+            return await pagination_widget.render_pagination(
+                bot_id, user_id, widget_config["params"], session, context_vars
+            )
         else:
             logger.error("wizard_unknown_widget", widget_type=widget_type)
             return "Неподдерживаемый виджет"
@@ -464,6 +487,95 @@ class WizardEngine:
                     }
 
         return result
+
+    async def handle_pagination_navigation(self, bot_id: str, user_id: int, nav_result: Dict[str, Any], session) -> Optional[Any]:
+        """Handle pagination navigation callback"""
+        # Get current wizard state
+        wizard_state = await redis_client.get_wizard_state(bot_id, user_id)
+        if not wizard_state or wizard_state.get("format") != "v1":
+            return None
+
+        # Extract navigation info
+        page = nav_result.get("page", 0)
+
+        # Get current step configuration
+        current_step = wizard_state.get("step", 0)
+        from .dsl_engine import load_spec
+        wizard_flows = self.parse_wizard_flows(await load_spec(bot_id))
+
+        for wizard_flow in wizard_flows:
+            if wizard_flow.entry_cmd in wizard_state.get("vars", {}).get("_entry_cmd", ""):
+                steps = wizard_flow.params.get("steps", [])
+                if current_step < len(steps):
+                    step_config = steps[current_step]
+                    if "widget" in step_config and step_config["widget"]["type"] == "widget.pagination.v1":
+                        # Re-render pagination with new page
+                        widget_params = step_config["widget"]["params"].copy()
+                        widget_params["current_page"] = page
+
+                        from .pagination_widget import pagination_widget
+                        result = await pagination_widget.render_pagination(
+                            bot_id, user_id, widget_params, session, wizard_state.get("vars", {})
+                        )
+
+                        if result and result.get("success"):
+                            return {
+                                "type": "edit_message",
+                                "text": result["text"],
+                                "keyboard": result["keyboard"]
+                            }
+
+        return None
+
+    async def handle_pagination_selection(self, bot_id: str, user_id: int, selection_result: Dict[str, Any], session) -> Optional[Any]:
+        """Handle pagination item selection callback"""
+        # Get current wizard state
+        wizard_state = await redis_client.get_wizard_state(bot_id, user_id)
+        if not wizard_state or wizard_state.get("format") != "v1":
+            return None
+
+        selected_id = selection_result.get("selected_id")
+        if not selected_id:
+            return None
+
+        # Store selected value and advance wizard
+        current_step = wizard_state.get("step", 0)
+        from .dsl_engine import load_spec
+        wizard_flows = self.parse_wizard_flows(await load_spec(bot_id))
+
+        for wizard_flow in wizard_flows:
+            # Find the correct wizard flow (simplified - in real implementation you'd store flow id in state)
+            steps = wizard_flow.params.get("steps", [])
+            if current_step < len(steps):
+                step_config = steps[current_step]
+                if "widget" in step_config and step_config["widget"]["type"] == "widget.pagination.v1":
+                    var_name = step_config.get("var", "selected_item")
+
+                    # Store selected value
+                    wizard_state["vars"][var_name] = selected_id
+
+                    # Move to next step
+                    next_step = current_step + 1
+
+                    if next_step >= len(steps):
+                        # Complete wizard
+                        return await self._complete_wizard_v1(bot_id, user_id, wizard_flow, wizard_state["vars"], session)
+                    else:
+                        # Move to next step
+                        wizard_state["step"] = next_step
+                        ttl_sec = wizard_state.get("ttl_sec", 86400)
+                        await redis_client.set_wizard_state(bot_id, user_id, wizard_state, ttl_sec)
+
+                        next_step_config = steps[next_step]
+                        if "widget" in next_step_config:
+                            return await self._handle_widget_step(bot_id, user_id, next_step_config, session)
+                        else:
+                            return {
+                                "type": "edit_message",
+                                "text": next_step_config["ask"]
+                            }
+
+        return None
 
     async def reset_wizard(self, bot_id: str, user_id: int):
         """Reset/cancel current wizard"""

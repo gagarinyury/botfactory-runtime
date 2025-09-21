@@ -23,6 +23,47 @@ template_renders = Counter("template_renders_total", "Total template renders", [
 widget_calendar_renders_total = Counter("widget_calendar_renders_total", "Total calendar widget renders", ["bot_id"])
 widget_calendar_picks_total = Counter("widget_calendar_picks_total", "Total calendar picks", ["bot_id", "mode"])
 
+# Pagination widget metrics
+widget_pagination_renders_total = Counter("widget_pagination_renders_total", "Total pagination widget renders", ["bot_id"])
+widget_pagination_selects_total = Counter("widget_pagination_selects_total", "Total pagination selections", ["bot_id"])
+
+# Budget and rate limiting metrics
+llm_budget_usage_total = Counter("llm_budget_usage_total", "Total LLM budget usage in tokens", ["bot_id"])
+llm_budget_limits_hit_total = Counter("llm_budget_limits_hit_total", "Budget limits hit", ["bot_id", "limit_type"])
+
+# LLM metrics
+llm_requests_total = Counter("llm_requests_total", "Total LLM requests", ["type", "status"])
+llm_latency_ms = Histogram("llm_latency_ms", "LLM request latency", ["type", "cached"], buckets=(10, 50, 100, 200, 500, 1000, 2000, 5000))
+llm_errors_total = Counter("llm_errors_total", "Total LLM errors", ["model", "error_type"])
+llm_tokens_total = Counter("llm_tokens_total", "Total LLM tokens", ["model", "type"])  # type: input, output
+llm_cache_hits_total = Counter("llm_cache_hits_total", "Total LLM cache hits", ["model"])
+
+# LLM JSON mode metrics
+llm_json_requests_total = Counter("llm_json_requests_total", "Total LLM JSON requests", ["model", "status"])
+llm_json_validation_success_total = Counter("llm_json_validation_success_total", "Successful JSON validations", ["model"])
+llm_json_validation_failed_total = Counter("llm_json_validation_failed_total", "Failed JSON validations", ["model", "error_type"])
+
+# Reply template metrics
+reply_sent_total = Counter("reply_sent_total", "Total replies sent", ["bot_id"])
+reply_failed_total = Counter("reply_failed_total", "Total reply failures", ["bot_id"])
+reply_latency_ms = Histogram("reply_latency_ms", "Reply template rendering latency", ["bot_id"], buckets=(0.1,0.5,1,2,5,10,20,50))
+
+# Broadcast system metrics
+broadcast_total = Counter("broadcast_total", "Total broadcast campaigns created", ["bot_id", "audience"])
+broadcast_sent_total = Counter("broadcast_sent_total", "Total broadcast messages sent", ["bot_id"])
+broadcast_failed_total = Counter("broadcast_failed_total", "Total broadcast messages failed", ["bot_id"])
+broadcast_duration_seconds = Histogram("broadcast_duration_seconds", "Broadcast campaign duration", ["bot_id"], buckets=(1,5,10,30,60,300,900,1800,3600))
+
+# I18n metrics
+i18n_renders_total = Counter("i18n_renders_total", "Total i18n renders", ["bot_id", "locale"])
+i18n_key_miss_total = Counter("i18n_key_miss_total", "Total i18n key misses", ["bot_id", "locale"])
+i18n_cache_hits_total = Counter("i18n_cache_hits_total", "Total i18n cache hits", ["bot_id", "locale"])
+i18n_cache_misses_total = Counter("i18n_cache_misses_total", "Total i18n cache misses", ["bot_id", "locale"])
+
+# Rate limit policy metrics
+policy_ratelimit_hits_total = Counter("policy_ratelimit_hits_total", "Total rate limit hits", ["bot_id", "scope"])
+policy_ratelimit_pass_total = Counter("policy_ratelimit_pass_total", "Total rate limit passes", ["bot_id", "scope"])
+
 async def measure(bot_id, fn, *a, **kw):
     """Measure function execution time and record metrics"""
     t = perf_counter()

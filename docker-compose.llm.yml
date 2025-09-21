@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # Local LLM service with 3B model using Docker Model Runner
+  llm:
+    image: ghcr.io/huggingface/text-generation-inference:latest
+    container_name: botfactory-llm
+    ports:
+      - "11434:80"
+    environment:
+      # Model configuration
+      - MODEL_ID=microsoft/Phi-3-mini-4k-instruct
+      - QUANTIZE=gptq
+      - MAX_TOTAL_TOKENS=4096
+      - MAX_INPUT_LENGTH=3584
+      - MAX_BATCH_PREFILL_TOKENS=4096
+      - MAX_BATCH_TOTAL_TOKENS=8192
+      # API configuration
+      - PORT=80
+      - HOSTNAME=0.0.0.0
+      # Performance tuning for 3B model
+      - NUM_SHARD=1
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ./models:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+    # Alternative 3B models:
+    # - microsoft/Phi-3-mini-4k-instruct (3.8B, efficient, good reasoning)
+    # - Qwen/Qwen2.5-3B-Instruct (3B, excellent multilingual)
+    # - google/gemma-2b-it (2B, very fast, good quality)
+
+  # Test client service
+  llm-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.llm-test
+    depends_on:
+      llm:
+        condition: service_healthy
+    environment:
+      - LLM_BASE_URL=http://llm:11434
+      - LLM_MODEL=phi3:3.8b-mini-instruct-4k-q4_K_M
+    profiles:
+      - test
+    command: python -m pytest tests/integration/test_llm_integration.py -v
+
+# Additional network for LLM isolation
+networks:
+  default:
+    name: botfactory-llm-network
