@@ -110,14 +110,23 @@ def find_flow_by_cmd(spec: dict, command: str) -> Optional[dict]:
     return None
 
 def register_wizard_flows(router: Router, spec: dict):
+    import structlog
+    logger = structlog.get_logger()
+
+    logger.info("register_wizard_flows_start", flows_count=len(spec.get("flows", [])))
+
     for flow in spec.get("flows", []):
         flow_type = flow.get("type")
         command = flow.get("entry_cmd")
 
+        logger.info("processing_flow", command=command, flow_type=flow_type, has_steps="steps" in flow)
+
         if not (command and command.startswith("/")):
+            logger.warning("skipping_flow_invalid_cmd", command=command)
             continue
 
         cmd_name = command.lstrip('/')
+        logger.info("processing_valid_flow", cmd_name=cmd_name, flow_type=flow_type)
 
         if flow_type == "flow.wizard.v1":
             @router.message(Command(commands=[cmd_name]))
@@ -151,6 +160,8 @@ def register_wizard_flows(router: Router, spec: dict):
             async def simple_flow_handler(message: Message, f=flow):
                 import structlog
                 logger = structlog.get_logger()
+
+                logger.info("simple_flow_handler_triggered", cmd=cmd_name, message_text=message.text, user_id=message.from_user.id)
 
                 steps = f.get("steps", [])
                 if steps and len(steps) > 0:

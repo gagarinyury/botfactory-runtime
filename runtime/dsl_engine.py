@@ -240,6 +240,9 @@ def _format_menu_response(response: Dict[str, Any]) -> str:
 
 def build_router(spec) -> Router:
     """Build aiogram Router from spec_json"""
+    import structlog
+    logger = structlog.get_logger()
+
     r = Router()
     from aiogram.types import Message
     from aiogram.filters import Command
@@ -248,15 +251,21 @@ def build_router(spec) -> Router:
 
     def add_cmd(cmd: str, reply: str):
         cmd_name = cmd.lstrip('/')
+        logger.info("registering_intent_cmd", cmd=cmd, cmd_name=cmd_name)
         @r.message(Command(commands=[cmd_name]))
         async def _(m: Message, _reply=reply):
+            logger.info("intent_cmd_triggered", cmd=cmd_name, reply_length=len(_reply))
             await m.answer(_reply)
+
+    logger.info("building_router", intents_count=len(spec.get("intents", [])), flows_count=len(spec.get("flows", [])))
 
     for it in spec.get("intents", []):
         if "cmd" in it:
             add_cmd(it["cmd"], it.get("reply", ""))
-    
+
     register_menu_flows(r, spec)
     register_wizard_flows(r, spec)
+
+    logger.info("router_built", handlers_count=len(r.message.handlers))
 
     return r

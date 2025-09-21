@@ -368,7 +368,7 @@ async def tg_webhook(bot_id: str, update: dict):
             dp = Dispatcher()
             spec = bot_config["spec_json"]
 
-            # 1. Handler for wizard steps
+            # 1. Handler for wizard steps ONLY (don't interfere with router commands)
             async def message_handler(message: Message):
                 user_id = message.from_user.id
                 state = await wizard_engine.get_wizard_state(bot_id, user_id)
@@ -380,8 +380,7 @@ async def tg_webhook(bot_id: str, update: dict):
                         if result.get("reply_markup") and isinstance(result["reply_markup"], dict):
                             reply_markup = InlineKeyboardMarkup(**result["reply_markup"])
                         await message.answer(result["text"], reply_markup=reply_markup)
-                    return True # Indicate that the message was handled
-                return False # No active wizard, let other handlers process
+                # Don't return anything - let other handlers process if no wizard state
 
             # 2. Handler for callback queries (e.g., from menus)
             async def callback_query_handler(query: CallbackQuery):
@@ -407,19 +406,36 @@ async def tg_webhook(bot_id: str, update: dict):
                     await query.answer(f"Callback received: {query.data}")
 
             # Build and include the main router for commands FIRST
-            router = await get_router(bot_id)
+            # DON'T use cached router - create fresh one each time to avoid "already attached" error
+            import structlog
+            logger = structlog.get_logger()
+
+            # Clear router cache to avoid "already attached" issues
+            router_cache.clear()
+            logger.info("router_cache_cleared")
+
+            logger.info("about_to_build_router", flows_count=len(spec.get("flows", [])))
+
+            from .dsl_engine import build_router
+            router = build_router(spec)
+
+            logger.info("router_built_result", router_exists=router is not None)
             if router:
-                import structlog
-                logger = structlog.get_logger()
                 logger.info("router_included", router_type=type(router).__name__)
                 dp.include_router(router)
             else:
-                import structlog
-                logger = structlog.get_logger()
                 logger.error("router_not_found", bot_id=bot_id)
 
-            # Register handlers AFTER router
-            dp.message.register(message_handler)
+            # Register specific handlers AFTER router (with lower priority)
+            # Only register message_handler for non-command messages when wizard is active
+            async def wizard_state_filter(message: Message) -> bool:
+                if message.text and message.text.startswith('/'):
+                    return False  # Let router handle commands
+                user_id = message.from_user.id
+                state = await wizard_engine.get_wizard_state(bot_id, user_id)
+                return state is not None
+
+            dp.message.register(message_handler, wizard_state_filter)
             dp.callback_query.register(callback_query_handler)
 
             # Inject bot_id into the update object for handlers to use
