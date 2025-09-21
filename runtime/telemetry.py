@@ -100,16 +100,26 @@ async def measured_preview(bot_id, fn, *a, **kw):
 
 async def measured_webhook(bot_id, fn, *a, **kw):
     """Measure with error tracking and latency for webhook"""
+    import structlog
+    logger = structlog.get_logger()
+
+    logger.info("measured_webhook_start", bot_id=bot_id, fn_name=fn.__name__)
+
     t = perf_counter()
     try:
         result = await fn(*a, **kw)
         updates.labels(bot_id).inc()
+        logger.info("measured_webhook_success", bot_id=bot_id, fn_name=fn.__name__)
         return result
     except HTTPException as e:
         errors.labels(bot_id, "webhook", str(e.status_code)).inc()
+        logger.error("measured_webhook_http_error", bot_id=bot_id, fn_name=fn.__name__, error=str(e))
         raise
     except Exception as e:
         errors.labels(bot_id, "webhook", "500").inc()
+        logger.error("measured_webhook_error", bot_id=bot_id, fn_name=fn.__name__, error=str(e))
         raise
     finally:
-        webhook_lat.observe((perf_counter() - t) * 1000)
+        duration = (perf_counter() - t) * 1000
+        webhook_lat.observe(duration)
+        logger.info("measured_webhook_complete", bot_id=bot_id, fn_name=fn.__name__, duration_ms=duration)

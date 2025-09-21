@@ -129,7 +129,7 @@ def register_wizard_flows(router: Router, spec: dict):
                 if flow_def:
                     reply_text = await start_wizard(bot_id, user_id, flow_def)
                     await message.answer(reply_text)
-        
+
         elif flow_type == "flow.generic.v1":
             @router.message(Command(commands=[cmd_name]))
             async def generic_flow_handler(message: Message, s=spec, c=command):
@@ -144,6 +144,29 @@ def register_wizard_flows(router: Router, spec: dict):
                         if result.get("reply_markup") and isinstance(result["reply_markup"], dict):
                             reply_markup = InlineKeyboardMarkup(**result["reply_markup"])
                         await message.answer(result["text"], reply_markup=reply_markup)
+
+        elif not flow_type and "steps" in flow:
+            # Handle simple flows without type (legacy format)
+            @router.message(Command(commands=[cmd_name]))
+            async def simple_flow_handler(message: Message, f=flow):
+                import structlog
+                logger = structlog.get_logger()
+
+                steps = f.get("steps", [])
+                if steps and len(steps) > 0:
+                    first_step = steps[0]
+                    reply_text = first_step.get("reply", "No reply configured")
+
+                    logger.info("sending_reply", cmd=cmd_name, reply_length=len(reply_text))
+
+                    # Try to send reply
+                    try:
+                        await message.answer(reply_text)
+                        logger.info("reply_sent_successfully", cmd=cmd_name)
+                    except Exception as e:
+                        logger.error("reply_send_failed", cmd=cmd_name, error=str(e))
+                else:
+                    logger.warning("no_steps_found", cmd=cmd_name, flow=f)
 
     @router.message(Command(commands=["cancel"]))
     async def cancel_handler(message: Message):

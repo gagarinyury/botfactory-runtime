@@ -344,6 +344,10 @@ async def tg_webhook(bot_id: str, update: dict):
         from aiogram.types import Update, Message, CallbackQuery, InlineKeyboardMarkup
         from .dsl_engine import build_router
         from . import wizard_engine
+        import structlog
+
+        logger = structlog.get_logger()
+        logger.info("process_update_start", bot_id=bot_id, update_id=update.get("update_id"))
 
         updates.labels(bot_id).inc()
 
@@ -402,13 +406,21 @@ async def tg_webhook(bot_id: str, update: dict):
                     # For other callbacks (e.g., widgets), can be extended here
                     await query.answer(f"Callback received: {query.data}")
 
-            # Register handlers
+            # Build and include the main router for commands FIRST
+            router = await get_router(bot_id)
+            if router:
+                import structlog
+                logger = structlog.get_logger()
+                logger.info("router_included", router_type=type(router).__name__)
+                dp.include_router(router)
+            else:
+                import structlog
+                logger = structlog.get_logger()
+                logger.error("router_not_found", bot_id=bot_id)
+
+            # Register handlers AFTER router
             dp.message.register(message_handler)
             dp.callback_query.register(callback_query_handler)
-
-            # Build and include the main router for commands
-            router = build_router(spec)
-            dp.include_router(router)
 
             # Inject bot_id into the update object for handlers to use
             aiogram_update = Update.model_validate(update)
@@ -426,9 +438,12 @@ async def tg_webhook(bot_id: str, update: dict):
     log.info("webhook", bot_id=bot_id, trace_id=tid, update_id=update.get("update_id"), update_preview=str(masked_update)[:200])
 
     try:
+        log.info("about_to_call_measured_webhook", bot_id=bot_id, trace_id=tid)
         result = await measured_webhook(bot_id, process_update, bot_id, update)
+        log.info("measured_webhook_returned", bot_id=bot_id, trace_id=tid, result=result)
         return result
-    except HTTPException:
+    except HTTPException as e:
+        log.error("webhook_http_exception", bot_id=bot_id, trace_id=tid, error=str(e))
         raise
     except Exception as e:
         errors.labels(bot_id, "webhook", "500").inc()
