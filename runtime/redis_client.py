@@ -33,6 +33,9 @@ class RedisClient:
         """Set wizard state with TTL (default 24 hours)"""
         key = f"state:{bot_id}:{user_id}"
         try:
+            # Auto-connect if not connected
+            if not self.redis:
+                await self.connect()
             await self.redis.setex(key, ttl, json.dumps(state))
             logger.debug("wizard_state_set", key=key, ttl=ttl)
         except Exception as e:
@@ -43,6 +46,9 @@ class RedisClient:
         """Get wizard state"""
         key = f"state:{bot_id}:{user_id}"
         try:
+            # Auto-connect if not connected
+            if not self.redis:
+                await self.connect()
             data = await self.redis.get(key)
             if data:
                 state = json.loads(data)
@@ -57,6 +63,9 @@ class RedisClient:
         """Delete wizard state"""
         key = f"state:{bot_id}:{user_id}"
         try:
+            # Auto-connect if not connected
+            if not self.redis:
+                await self.connect()
             await self.redis.delete(key)
             logger.debug("wizard_state_deleted", key=key)
         except Exception as e:

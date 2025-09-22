@@ -391,13 +391,13 @@ async def tg_webhook(bot_id: str, update: dict):
                         from_user=query.from_user,
                         text=query.data
                     )
-                    setattr(new_message, 'bot_id', bot_id) # Inject bot_id
+                    # Don't inject bot_id into frozen object - use global variable instead
                     await message_handler(new_message)
                     # After handling, try to feed it to the router as well
                     router = build_router(spec)
                     dp_temp = Dispatcher()
                     dp_temp.include_router(router)
-                    await dp_temp.feed_update(bot, Update(message=new_message, update_id=query.update.update_id))
+                    await dp_temp.feed_update(bot, Update(message=new_message, update_id=999999))
                     await query.answer() # Acknowledge the callback
                 else:
                     # For other callbacks (e.g., widgets), can be extended here
