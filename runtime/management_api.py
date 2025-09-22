@@ -70,6 +70,30 @@ class WebhookOut(BaseModel):
     webhook_ok: bool
     url: Optional[str]
 
+class UpdateBotIn(BaseModel, extra=Extra.forbid):
+    name: Optional[str] = None
+    spec_json: Optional[Dict[str, Any]] = None
+
+class UpdateBotOut(BaseModel):
+    bot_id: UUID
+    name: str
+    version: int
+    updated: bool
+
+class DeleteBotOut(BaseModel):
+    bot_id: UUID
+    deleted: bool
+    message: str
+
+class ListBotsOut(BaseModel):
+    bots: List[Dict[str, Any]]
+    total: int
+
+class ClearDataOut(BaseModel):
+    bot_id: UUID
+    data_cleared: bool
+    tables_cleared: List[str]
+
 # Routers
 router = APIRouter(prefix="/bots", tags=["Bot Management"])
 spec_router = APIRouter(tags=["Bot Management"])
@@ -112,6 +136,19 @@ async def validate_spec_logic(spec: Dict[str, Any]) -> List[ErrorItem]:
     return errors
 
 # --- Endpoints ---
+
+@router.get("", response_model=ListBotsOut)
+async def list_bots():
+    """Get list of all bots"""
+    try:
+        registry = BotRegistry()
+        async with async_session() as session:
+            bots = await registry.list_bots(session)
+        api_requests_total.labels(route="/bots", code=200).inc()
+        return ListBotsOut(bots=bots, total=len(bots))
+    except Exception as e:
+        api_requests_total.labels(route="/bots", code=500).inc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 @router.post("", status_code=201, response_model=CreateBotOut)
 async def create_bot(bot_in: CreateBotIn):
@@ -270,3 +307,210 @@ async def set_bot_webhook(bot_id: UUID, webhook_in: WebhookIn):
         raise HTTPException(status_code=500, detail=f"Telegram API call failed: {e}")
 
     return WebhookOut(bot_id=bot_id, webhook_ok=True, url=webhook_url if webhook_in.set else None)
+
+@router.put("/{bot_id}", response_model=UpdateBotOut)
+async def update_bot(bot_id: UUID, update_data: UpdateBotIn):
+    """Update bot name and/or spec_json"""
+    if not update_data.name and not update_data.spec_json:
+        raise HTTPException(status_code=400, detail="At least name or spec_json must be provided")
+
+    # Validate spec if provided
+    if update_data.spec_json:
+        errors = await validate_spec_logic(update_data.spec_json)
+        if errors:
+            dsl_validate_errors_total.inc()
+            raise HTTPException(status_code=422, detail={"errors": [{"path": e.path, "msg": e.msg} for e in errors]})
+
+    try:
+        async with async_session() as session:
+            # Check if bot exists
+            result = await session.execute(
+                text("SELECT name, version FROM bots WHERE id = :bot_id"),
+                {"bot_id": bot_id}
+            )
+            bot_row = result.fetchone()
+            if not bot_row:
+                api_requests_total.labels(route="/bots/{bot_id}", code=404).inc()
+                raise HTTPException(status_code=404, detail="Bot not found")
+
+            current_name = bot_row.name
+            current_version = bot_row.version or 1
+            new_version = current_version + 1
+
+            # Update bot table
+            update_fields = []
+            update_params = {"bot_id": bot_id, "version": new_version}
+
+            if update_data.name:
+                update_fields.append("name = :name")
+                update_params["name"] = update_data.name
+                final_name = update_data.name
+            else:
+                final_name = current_name
+
+            if update_data.spec_json:
+                update_fields.append("spec_json = :spec_json, version = :version")
+                update_params["spec_json"] = json.dumps(update_data.spec_json)
+
+            if update_fields:
+                update_query = f"UPDATE bots SET {', '.join(update_fields)} WHERE id = :bot_id"
+                await session.execute(text(update_query), update_params)
+                await session.commit()
+
+                # Clear router cache
+                keys_to_remove = [key for key in router_cache.keys() if key.startswith(str(bot_id))]
+                for key in keys_to_remove:
+                    del router_cache[key]
+
+                # Clear i18n cache
+                i18n_manager.invalidate_cache(str(bot_id))
+
+                api_requests_total.labels(route="/bots/{bot_id}", code=200).inc()
+                return UpdateBotOut(bot_id=bot_id, name=final_name, version=new_version, updated=True)
+
+            api_requests_total.labels(route="/bots/{bot_id}", code=200).inc()
+            return UpdateBotOut(bot_id=bot_id, name=final_name, version=current_version, updated=False)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_requests_total.labels(route="/bots/{bot_id}", code=500).inc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+@router.delete("/{bot_id}", response_model=DeleteBotOut)
+async def delete_bot(bot_id: UUID):
+    """Delete bot and all associated data"""
+    try:
+        registry = BotRegistry()
+        async with async_session() as session:
+            deleted = await registry.delete_bot(session, str(bot_id))
+            if not deleted:
+                api_requests_total.labels(route="/bots/{bot_id}", code=404).inc()
+                raise HTTPException(status_code=404, detail="Bot not found")
+
+            # Clear caches
+            keys_to_remove = [k for k in router_cache.keys() if k.startswith(str(bot_id))]
+            for key in keys_to_remove:
+                del router_cache[key]
+            i18n_manager.invalidate_cache(str(bot_id))
+
+        api_requests_total.labels(route="/bots/{bot_id}", code=200).inc()
+        return DeleteBotOut(bot_id=bot_id, deleted=True, message="Bot deleted successfully")
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_requests_total.labels(route="/bots/{bot_id}", code=500).inc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+@router.get("/{bot_id}")
+async def get_bot_details(bot_id: UUID):
+    """Get bot details including spec and router info"""
+    try:
+        from .loader import loader
+        async with async_session() as session:
+            bot_config = await loader.load_spec_by_bot_id(session, str(bot_id))
+            if not bot_config:
+                api_requests_total.labels(route="/bots/{bot_id}", code=404).inc()
+                raise HTTPException(status_code=404, detail="Bot not found")
+
+            # Build router using DSL engine
+            from .dsl_engine import DSLEngine
+            dsl_engine = DSLEngine()
+            router_result = dsl_engine.build_router_from_spec(bot_config["spec_json"])
+
+        api_requests_total.labels(route="/bots/{bot_id}", code=200).inc()
+        return {
+            "bot": bot_config,
+            "router": router_result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_requests_total.labels(route="/bots/{bot_id}", code=500).inc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+@router.get("/{bot_id}/spec")
+async def get_bot_spec(bot_id: UUID):
+    """Get bot DSL specification"""
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                text("SELECT spec_json FROM bot_specs WHERE bot_id = :bot_id ORDER BY version DESC LIMIT 1"),
+                {"bot_id": bot_id}
+            )
+            row = result.fetchone()
+            if not row:
+                api_requests_total.labels(route="/bots/{bot_id}/spec", code=404).inc()
+                raise HTTPException(status_code=404, detail="Bot spec not found")
+
+        api_requests_total.labels(route="/bots/{bot_id}/spec", code=200).inc()
+        return row.spec_json
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_requests_total.labels(route="/bots/{bot_id}/spec", code=500).inc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+@router.delete("/{bot_id}/data", response_model=ClearDataOut)
+async def clear_bot_data(bot_id: UUID):
+    """Clear all user data for bot"""
+    try:
+        async with async_session() as session:
+            # Check if bot exists first
+            result = await session.execute(
+                text("SELECT id FROM bots WHERE id = :bot_id"),
+                {"bot_id": bot_id}
+            )
+            if not result.fetchone():
+                api_requests_total.labels(route="/bots/{bot_id}/data", code=404).inc()
+                raise HTTPException(status_code=404, detail="Bot not found")
+
+            # Clear related data tables
+            tables_cleared = []
+
+            # Clear bookings
+            result = await session.execute(
+                text("DELETE FROM bookings WHERE bot_id = :bot_id"),
+                {"bot_id": bot_id}
+            )
+            if result.rowcount > 0:
+                tables_cleared.append("bookings")
+
+            await session.commit()
+
+        api_requests_total.labels(route="/bots/{bot_id}/data", code=200).inc()
+        return ClearDataOut(bot_id=bot_id, data_cleared=True, tables_cleared=tables_cleared)
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_requests_total.labels(route="/bots/{bot_id}/data", code=500).inc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+@router.post("/{bot_id}/validate", response_model=ValidateOut)
+async def validate_bot_spec(bot_id: UUID, spec: Dict[str, Any]):
+    """Validate bot DSL specification without saving"""
+    try:
+        # Check if bot exists
+        async with async_session() as session:
+            result = await session.execute(
+                text("SELECT id FROM bots WHERE id = :bot_id"),
+                {"bot_id": bot_id}
+            )
+            if not result.fetchone():
+                api_requests_total.labels(route="/bots/{bot_id}/validate", code=404).inc()
+                raise HTTPException(status_code=404, detail="Bot not found")
+
+        # Validate spec
+        errors = await validate_spec_logic(spec)
+        if errors:
+            dsl_validate_errors_total.inc()
+            api_requests_total.labels(route="/bots/{bot_id}/validate", code=422).inc()
+        else:
+            api_requests_total.labels(route="/bots/{bot_id}/validate", code=200).inc()
+
+        return ValidateOut(ok=not errors, errors=errors)
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_requests_total.labels(route="/bots/{bot_id}/validate", code=500).inc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")

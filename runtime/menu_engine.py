@@ -23,15 +23,20 @@ def register_menu_flows(router: Router, spec: dict):
     """
     Registers handlers for menu flows.
     """
+    import structlog
+    logger = structlog.get_logger()
+
     flows = spec.get("flows", [])
     for flow in flows:
         if flow.get("type") == "flow.menu.v1":
             command = flow.get("entry_cmd")
             if command and command.startswith("/"):
                 cmd_name = command.lstrip('/')
-                
+                logger.info("registering_menu_cmd", cmd=command, cmd_name=cmd_name)
+
                 @router.message(Command(commands=[cmd_name]))
                 async def menu_handler(message: Message, f=flow):
+                    logger.info("menu_cmd_triggered", cmd=cmd_name, message_text=message.text, user_id=message.from_user.id)
                     menu_data = build_menu_message(f.get("params", {}))
                     await message.answer(text=menu_data["text"], reply_markup=menu_data["reply_markup"])
 

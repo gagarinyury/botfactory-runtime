@@ -88,9 +88,14 @@ async def execute_actions(bot_id: str, user_id: int, actions: list, context_vars
         executor.context = context_vars
 
         for action_def in actions:
-            action_key = action_def["type"].replace(".", "_")
-            adapted_action = {action_key.replace("_", "."): action_def["params"]}
-            
+            if "type" in action_def:
+                # Новый формат DSL v1
+                action_key = action_def["type"].replace(".", "_")
+                adapted_action = {action_key.replace("_", "."): action_def["params"]}
+            else:
+                # Старый формат - берём первый ключ как action type
+                adapted_action = action_def
+
             action_result = await executor.execute_action(adapted_action)
             if not action_result.get("success"):
                 # Consider logging the error more formally
@@ -129,8 +134,10 @@ def register_wizard_flows(router: Router, spec: dict):
         logger.info("processing_valid_flow", cmd_name=cmd_name, flow_type=flow_type)
 
         if flow_type == "flow.wizard.v1":
+            logger.info("registering_wizard_cmd", cmd=command, cmd_name=cmd_name)
             @router.message(Command(commands=[cmd_name]))
             async def wizard_start_handler(message: Message, s=spec, c=command):
+                logger.info("wizard_cmd_triggered", cmd=cmd_name, message_text=message.text, user_id=message.from_user.id)
                 import builtins
                 bot_id = getattr(builtins, '_current_bot_id', 'unknown')
                 user_id = message.from_user.id
