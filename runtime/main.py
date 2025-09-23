@@ -1,6 +1,4 @@
 from fastapi import FastAPI, HTTPException, Response
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
 import os
 from .registry import BotRegistry
 from .loader import BotLoader
@@ -18,18 +16,15 @@ dsl_engine = DSLEngine()
 from .telemetry import updates, lat, webhook_lat, errors
 
 # Database setup
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://dev:dev@pg:5432/botfactory")
-engine = create_async_engine(DATABASE_URL)
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+from .database import async_session
 
 # Simple cache for invalidation demo
 bot_cache = {}
 from cachetools import TTLCache
-router_cache = TTLCache(maxsize=256, ttl=600)  # 256 ботов, 10 минут
+spec_cache = TTLCache(maxsize=256, ttl=600)  # 256 ботов, 10 минут - кешируем DSL spec
 
-async def get_router(bot_id: str):
-    """Get cached router for bot_id, rebuild if not cached"""
-    # Load spec to get version
+async def get_cached_spec(bot_id: str):
+    """Get cached DSL spec for bot_id, reload if not cached"""
     async with async_session() as session:
         bot_config = await loader.load_spec_by_bot_id(session, bot_id)
         if not bot_config:
@@ -39,14 +34,17 @@ async def get_router(bot_id: str):
         spec_version = bot_config.get("version", 1)
         cache_key = f"{bot_id}:{spec_version}"
 
-        if cache_key in router_cache:
-            return router_cache[cache_key]
+        if cache_key in spec_cache:
+            return spec_cache[cache_key]
 
-        # Build router and cache it
-        from .dsl_engine import build_router
-        router = build_router(bot_config["spec_json"])
-        router_cache[cache_key] = router
-        return router
+        # Cache the DSL spec (not Router!)
+        spec_cache[cache_key] = bot_config["spec_json"]
+        return bot_config["spec_json"]
+
+def build_fresh_router(spec):
+    """Build a fresh router from DSL spec - can be called multiple times"""
+    from .dsl_engine import build_router
+    return build_router(spec)
 
 @app.get("/health")
 def health(): return {"ok": True}
@@ -105,31 +103,7 @@ async def health_llm():
     except Exception:
         return Response(content='{"llm_ok": false}', status_code=503, media_type="application/json")
 
-@app.get("/bots/{bot_id}")
-async def get_bot_spec(bot_id: str):
-    """Get bot spec_json by ID"""
-    from .http_errors import fail
-
-    try:
-        async with async_session() as session:
-            bot_config = await loader.load_spec_by_bot_id(session, bot_id)
-            if not bot_config:
-                fail(404, "not_found", "Bot not found", bot_id=bot_id)
-
-            # Build router using DSL engine
-            router_result = dsl_engine.build_router_from_spec(bot_config["spec_json"])
-
-            return {
-                "bot": bot_config,
-                "router": router_result
-            }
-    except HTTPException:
-        raise  # Re-raise HTTP exceptions as-is
-    except Exception as e:
-        if "db" in str(e).lower() or "database" in str(e).lower():
-            fail(503, "db_unavailable", "Database connection failed")
-        else:
-            fail(500, "internal", "Internal server error", detail=str(e))
+# Bot endpoints moved to management_api.py
 
 
 # I18n API endpoints
@@ -347,6 +321,14 @@ async def tg_webhook(bot_id: str, update: dict):
         logger = structlog.get_logger()
         logger.info("process_update_start", bot_id=bot_id, update_id=update.get("update_id"))
 
+        # Логируем структуру update для диагностики callback queries
+        has_message = "message" in update
+        has_callback_query = "callback_query" in update
+        logger.info("update_structure", bot_id=bot_id,
+                   has_message=has_message,
+                   has_callback_query=has_callback_query,
+                   update_keys=list(update.keys()))
+
         updates.labels(bot_id).inc()
 
         async with async_session() as session:
@@ -382,40 +364,54 @@ async def tg_webhook(bot_id: str, update: dict):
 
             # 2. Handler for callback queries (e.g., from menus)
             async def callback_query_handler(query: CallbackQuery):
+                log.info("callback_query_received", bot_id=bot_id, callback_data=query.data, user_id=query.from_user.id)
+
+                # НЕМЕДЛЕННО отвечаем на callback, чтобы избежать timeout
+                try:
+                    await query.answer()
+                    log.info("callback_query_answered", bot_id=bot_id, callback_data=query.data)
+                except Exception as e:
+                    log.warning("callback_answer_failed", bot_id=bot_id, error=str(e))
+
                 if query.data.startswith("/"):
-                    # Emulate a command message
+                    log.info("callback_query_command", bot_id=bot_id, command=query.data)
+
+                    # Создаем новый диспетчер для обработки команды из callback
+                    log.info("callback_creating_temp_dispatcher", bot_id=bot_id)
+
+                    router = build_fresh_router(cached_spec)
+                    dp_temp = Dispatcher()
+                    dp_temp.include_router(router)
+
+                    # Эмулируем сообщение команды
                     new_message = Message(
-                        message_id=query.message.message_id, # Not perfect, but needed
+                        message_id=query.message.message_id,
                         date=query.message.date,
                         chat=query.message.chat,
                         from_user=query.from_user,
                         text=query.data
                     )
-                    # Don't inject bot_id into frozen object - use global variable instead
-                    await message_handler(new_message)
-                    # After handling, try to feed it to the router as well
-                    router = build_router(spec)
-                    dp_temp = Dispatcher()
-                    dp_temp.include_router(router)
-                    await dp_temp.feed_update(bot, Update(message=new_message, update_id=999999))
-                    await query.answer() # Acknowledge the callback
-                else:
-                    # For other callbacks (e.g., widgets), can be extended here
-                    await query.answer(f"Callback received: {query.data}")
 
-            # Build and include the main router for commands FIRST
-            # DON'T use cached router - create fresh one each time to avoid "already attached" error
+                    log.info("callback_feeding_update", bot_id=bot_id, command=query.data)
+                    await dp_temp.feed_update(bot, Update(message=new_message, update_id=999999))
+                    log.info("callback_query_handled", bot_id=bot_id, command=query.data)
+                else:
+                    log.info("callback_query_other", bot_id=bot_id, callback_data=query.data)
+
+            # Build router from cached DSL spec - avoid "already attached" issues
             import structlog
             logger = structlog.get_logger()
 
-            # Clear router cache to avoid "already attached" issues
-            router_cache.clear()
-            logger.info("router_cache_cleared")
+            # Get cached DSL spec (much faster than DB query + parsing)
+            cached_spec = await get_cached_spec(bot_id)
+            if not cached_spec:
+                logger.error("cached_spec_not_found", bot_id=bot_id)
+                return {"ok": False}
 
-            logger.info("about_to_build_router", flows_count=len(spec.get("flows", [])))
+            logger.info("about_to_build_router", flows_count=len(cached_spec.get("flows", [])))
 
-            from .dsl_engine import build_router
-            router = build_router(spec)
+            # Build fresh router from cached spec (safe for multiple Dispatchers)
+            router = build_fresh_router(cached_spec)
 
             logger.info("router_built_result", router_exists=router is not None)
             if router:
@@ -445,11 +441,20 @@ async def tg_webhook(bot_id: str, update: dict):
             builtins._current_bot_id = bot_id
 
             await dp.feed_update(bot, aiogram_update)
+
+            # Log full update content for debugging unhandled updates
+            log.info("update_processing_complete", bot_id=bot_id, update_id=update.get("update_id"),
+                    has_message=bool(aiogram_update.message),
+                    has_callback_query=bool(aiogram_update.callback_query),
+                    full_update_keys=list(update.keys()) if isinstance(update, dict) else "not_dict")
+
             return {"ok": True}
 
     tid = with_trace()
     masked_update = mask_sensitive_data(update)
     log.info("webhook", bot_id=bot_id, trace_id=tid, update_id=update.get("update_id"), update_preview=str(masked_update)[:200])
+    # Log full update for debugging callback queries
+    log.info("webhook_full_update", bot_id=bot_id, trace_id=tid, full_update=update)
 
     try:
         log.info("about_to_call_measured_webhook", bot_id=bot_id, trace_id=tid)

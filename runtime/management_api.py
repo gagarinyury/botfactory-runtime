@@ -14,8 +14,28 @@ from pydantic import BaseModel, Field, Extra
 from sqlalchemy import text, Table, Column, MetaData, BigInteger, Text, DateTime, Uuid, func, Identity
 from sqlalchemy.exc import IntegrityError
 
+# Import configuration
+try:
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from config import config
+except ImportError:
+    # Fallback configuration
+    class FallbackConfig:
+        class WebhookConfig:
+            domain = "localhost:8000"
+            use_ngrok = False
+            path_prefix = "/tg"
+            def get_webhook_url(self, bot_id):
+                return f"https://{self.domain}{self.path_prefix}/{bot_id}"
+        webhook = WebhookConfig()
+    config = FallbackConfig()
+
 # Import from local packages
-from .main import async_session, router_cache
+from .database import async_session
+from cachetools import TTLCache
+spec_cache = TTLCache(maxsize=256, ttl=600)  # Обновляем на spec_cache
 from .registry import BotRegistry
 from .redis_client import redis_client
 from .i18n_manager import i18n_manager
@@ -30,6 +50,8 @@ class CreateBotOut(BaseModel):
     bot_id: UUID
     name: str
     status: str
+    webhook_configured: bool = False
+    webhook_url: Optional[str] = None
 
 class PutSpecOut(BaseModel):
     bot_id: UUID
@@ -80,6 +102,30 @@ class UpdateBotOut(BaseModel):
     version: int
     updated: bool
 
+class UpdateTokenIn(BaseModel, extra=Extra.forbid):
+    token: str
+
+class UpdateTokenOut(BaseModel):
+    bot_id: UUID
+    token_updated: bool
+    webhook_updated: bool
+
+class LLMSubmitRequest(BaseModel, extra=Extra.forbid):
+    raw_dsl: str
+    llm_model: Optional[str] = None
+    attempt: int = 1
+
+class LLMSubmitOut(BaseModel):
+    success: bool
+    bot_id: UUID
+    fixes_applied: Optional[List[str]] = None
+    final_spec: Optional[Dict[str, Any]] = None
+    errors: Optional[List[str]] = None
+    suggestions: Optional[List[str]] = None
+    fallback_template: Optional[Dict[str, Any]] = None
+    message: str
+    version: Optional[int] = None
+
 class DeleteBotOut(BaseModel):
     bot_id: UUID
     deleted: bool
@@ -94,18 +140,75 @@ class ClearDataOut(BaseModel):
     data_cleared: bool
     tables_cleared: List[str]
 
+class BotInfoOut(BaseModel):
+    bot_id: UUID
+    name: str
+    status: str
+    token: str
+    created_at: Optional[datetime]
+    spec_version: Optional[int]
+    webhook_url: Optional[str]
+
 # Routers
 router = APIRouter(prefix="/bots", tags=["Bot Management"])
 spec_router = APIRouter(tags=["Bot Management"])
 
 # --- Logic ---
 
+async def get_ngrok_url() -> Optional[str]:
+    """Get current ngrok URL from ngrok API"""
+    if not config.webhook.use_ngrok:
+        return None
+        
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(config.webhook.ngrok_api_url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    tunnels = data.get("tunnels", [])
+                    for tunnel in tunnels:
+                        if tunnel.get("proto") == "https":
+                            return tunnel.get("public_url")
+    except Exception:
+        pass
+    return None
+
+async def get_webhook_domain() -> str:
+    """Get webhook domain based on configuration"""
+    if config.webhook.domain == "auto-ngrok":
+        ngrok_url = await get_ngrok_url()
+        if ngrok_url:
+            return ngrok_url.replace("https://", "")
+        else:
+            raise ValueError("Ngrok is not running or not accessible")
+    else:
+        return config.webhook.domain
+
+async def setup_webhook_automatically(bot_id: UUID, token: str) -> bool:
+    """Automatically setup webhook for a bot"""
+    try:
+        domain = await get_webhook_domain()
+        webhook_url = config.webhook.get_webhook_url(str(bot_id)).replace(config.webhook.domain, domain)
+        
+        async with aiohttp.ClientSession() as http_session:
+            api_url = f"https://api.telegram.org/bot{token}/setWebhook"
+            payload = {
+                "url": webhook_url,
+                "allowed_updates": ["message", "callback_query"]
+            }
+            async with http_session.post(api_url, json=payload) as response:
+                data = await response.json()
+                return response.status == 200 and data.get("ok", False)
+    except Exception:
+        return False
+
 async def validate_spec_logic(spec: Dict[str, Any]) -> List[ErrorItem]:
     errors: List[ErrorItem] = []
     known_blocks = {
         "flow.menu.v1", "flow.wizard.v1", "flow.generic.v1",
         "action.reply_template.v1", "action.sql_query.v1", "action.sql_exec.v1",
-        "i18n.fluent.v1"
+        "widget.calendar.v1", "widget.pagination.v1",
+        "i18n.fluent.v1", "ops.broadcast.v1"
     }
     used_blocks = set(spec.get("use", []))
     if unknown := used_blocks - known_blocks:
@@ -150,6 +253,51 @@ async def list_bots():
         api_requests_total.labels(route="/bots", code=500).inc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
+@router.get("/{bot_id}", response_model=BotInfoOut)
+async def get_bot_info(bot_id: UUID):
+    """Get bot information"""
+    try:
+        async with async_session() as session:
+            # Get bot basic info
+            result = await session.execute(
+                text("SELECT id, name, status, token FROM bots WHERE id = :bot_id"),
+                {"bot_id": bot_id}
+            )
+            bot_row = result.fetchone()
+            if not bot_row:
+                api_requests_total.labels(route="/bots/{bot_id}", code=404).inc()
+                raise HTTPException(status_code=404, detail="Bot not found")
+            
+            # Get latest spec version
+            spec_result = await session.execute(
+                text("SELECT MAX(version) FROM bot_specs WHERE bot_id = :bot_id"),
+                {"bot_id": bot_id}
+            )
+            spec_version = spec_result.scalar_one_or_none()
+            
+            # Generate webhook URL
+            try:
+                domain = await get_webhook_domain()
+                webhook_url = config.webhook.get_webhook_url(str(bot_id)).replace(config.webhook.domain, domain)
+            except Exception:
+                webhook_url = f"https://example.com{config.webhook.path_prefix}/{bot_id}"
+            
+            api_requests_total.labels(route="/bots/{bot_id}", code=200).inc()
+            return BotInfoOut(
+                bot_id=bot_row.id,
+                name=bot_row.name,
+                status=bot_row.status,
+                token=bot_row.token,
+                created_at=None,
+                spec_version=spec_version,
+                webhook_url=webhook_url
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_requests_total.labels(route="/bots/{bot_id}", code=500).inc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
 @router.post("", status_code=201, response_model=CreateBotOut)
 async def create_bot(bot_in: CreateBotIn):
     try:
@@ -157,7 +305,23 @@ async def create_bot(bot_in: CreateBotIn):
             result = await session.execute(text("SELECT id, name, status FROM bots WHERE name = :name"), {"name": bot_in.name})
             if existing_bot := result.fetchone():
                 api_requests_total.labels(route="/bots", code=200).inc()
-                return CreateBotOut(bot_id=existing_bot.id, name=existing_bot.name, status=existing_bot.status)
+                # For existing bot, check webhook status
+                webhook_configured = await setup_webhook_automatically(existing_bot.id, bot_in.token)
+                if webhook_configured:
+                    try:
+                        domain = await get_webhook_domain()
+                        webhook_url = config.webhook.get_webhook_url(str(existing_bot.id)).replace(config.webhook.domain, domain)
+                    except Exception:
+                        webhook_url = None
+                else:
+                    webhook_url = None
+                return CreateBotOut(
+                    bot_id=existing_bot.id, 
+                    name=existing_bot.name, 
+                    status=existing_bot.status,
+                    webhook_configured=webhook_configured,
+                    webhook_url=webhook_url
+                )
             
             new_bot_id = uuid4()
             try:
@@ -166,12 +330,30 @@ async def create_bot(bot_in: CreateBotIn):
                     {"id": new_bot_id, "name": bot_in.name, "token": bot_in.token}
                 )
                 await session.commit()
+                
+                # Automatically setup webhook for new bot
+                webhook_configured = await setup_webhook_automatically(new_bot_id, bot_in.token)
+                if webhook_configured:
+                    try:
+                        domain = await get_webhook_domain()
+                        webhook_url = config.webhook.get_webhook_url(str(new_bot_id)).replace(config.webhook.domain, domain)
+                    except Exception:
+                        webhook_url = None
+                else:
+                    webhook_url = None
+                
             except IntegrityError:
                 await session.rollback()
                 api_requests_total.labels(route="/bots", code=409).inc()
                 raise HTTPException(status_code=409, detail="A bot with this ID or name already exists.")
             api_requests_total.labels(route="/bots", code=201).inc()
-            return CreateBotOut(bot_id=new_bot_id, name=bot_in.name, status="active")
+            return CreateBotOut(
+                bot_id=new_bot_id, 
+                name=bot_in.name, 
+                status="active",
+                webhook_configured=webhook_configured,
+                webhook_url=webhook_url
+            )
     except Exception as e:
         api_requests_total.labels(route="/bots", code=500).inc()
         if isinstance(e, HTTPException): raise e
@@ -235,9 +417,9 @@ async def prepare_bot(bot_id: UUID):
 
 @router.post("/{bot_id}/reload", response_model=ReloadOut)
 async def reload_bot_endpoint(bot_id: UUID):
-    keys_to_remove = [key for key in router_cache.keys() if key.startswith(str(bot_id))]
+    keys_to_remove = [key for key in spec_cache.keys() if key.startswith(str(bot_id))]
     for key in keys_to_remove:
-        del router_cache[key]
+        del spec_cache[key]
     i18n_manager.invalidate_cache(str(bot_id))
     async with async_session() as session:
         result = await session.execute(text("SELECT MAX(version) FROM bot_specs WHERE bot_id = :bot_id"), {"bot_id": bot_id})
@@ -357,7 +539,7 @@ async def update_bot(bot_id: UUID, update_data: UpdateBotIn):
                 await session.execute(text(update_query), update_params)
                 await session.commit()
 
-                # Clear router cache
+                # Clear spec cache
                 keys_to_remove = [key for key in router_cache.keys() if key.startswith(str(bot_id))]
                 for key in keys_to_remove:
                     del router_cache[key]
@@ -378,12 +560,15 @@ async def update_bot(bot_id: UUID, update_data: UpdateBotIn):
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 @router.delete("/{bot_id}", response_model=DeleteBotOut)
-async def delete_bot(bot_id: UUID):
+async def delete_bot_endpoint(bot_id: UUID):
     """Delete bot and all associated data"""
+    print(f"DEBUG: DELETE endpoint called with bot_id: {bot_id}")
     try:
         registry = BotRegistry()
         async with async_session() as session:
+            print(f"DEBUG: About to call registry.delete_bot for {bot_id}")
             deleted = await registry.delete_bot(session, str(bot_id))
+            print(f"DEBUG: registry.delete_bot returned: {deleted}")
             if not deleted:
                 api_requests_total.labels(route="/bots/{bot_id}", code=404).inc()
                 raise HTTPException(status_code=404, detail="Bot not found")
@@ -402,31 +587,115 @@ async def delete_bot(bot_id: UUID):
         api_requests_total.labels(route="/bots/{bot_id}", code=500).inc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
-@router.get("/{bot_id}")
-async def get_bot_details(bot_id: UUID):
-    """Get bot details including spec and router info"""
+@router.put("/{bot_id}/token", response_model=UpdateTokenOut)
+async def update_bot_token(bot_id: UUID, token_data: UpdateTokenIn):
+    """Update bot token and refresh webhook"""
     try:
-        from .loader import loader
         async with async_session() as session:
-            bot_config = await loader.load_spec_by_bot_id(session, str(bot_id))
-            if not bot_config:
-                api_requests_total.labels(route="/bots/{bot_id}", code=404).inc()
+            # Check if bot exists
+            result = await session.execute(
+                text("SELECT id FROM bots WHERE id = :bot_id"),
+                {"bot_id": bot_id}
+            )
+            if not result.fetchone():
+                api_requests_total.labels(route="/bots/{bot_id}/token", code=404).inc()
                 raise HTTPException(status_code=404, detail="Bot not found")
 
-            # Build router using DSL engine
-            from .dsl_engine import DSLEngine
-            dsl_engine = DSLEngine()
-            router_result = dsl_engine.build_router_from_spec(bot_config["spec_json"])
+            # Update token
+            await session.execute(
+                text("UPDATE bots SET token = :token WHERE id = :bot_id"),
+                {"bot_id": bot_id, "token": token_data.token}
+            )
+            await session.commit()
 
-        api_requests_total.labels(route="/bots/{bot_id}", code=200).inc()
-        return {
-            "bot": bot_config,
-            "router": router_result
-        }
+            # Clear spec cache for this bot
+            keys_to_remove = [key for key in router_cache.keys() if key.startswith(str(bot_id))]
+            for key in keys_to_remove:
+                del router_cache[key]
+
+        # Try to update webhook with new token
+        webhook_updated = await setup_webhook_automatically(bot_id, token_data.token)
+
+        api_requests_total.labels(route="/bots/{bot_id}/token", code=200).inc()
+        return UpdateTokenOut(bot_id=bot_id, token_updated=True, webhook_updated=webhook_updated)
+
     except HTTPException:
         raise
     except Exception as e:
-        api_requests_total.labels(route="/bots/{bot_id}", code=500).inc()
+        api_requests_total.labels(route="/bots/{bot_id}/token", code=500).inc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+@router.post("/{bot_id}/spec/llm-submit", response_model=LLMSubmitOut)
+async def submit_llm_generated_spec(bot_id: UUID, request: LLMSubmitRequest):
+    """LLM-friendly endpoint для отправки DSL с автофиксом"""
+    from .llm_dsl_validator import LLMDSLValidator
+
+    try:
+        # 1. Проверяем что бот существует
+        async with async_session() as session:
+            result = await session.execute(
+                text("SELECT id FROM bots WHERE id = :bot_id"),
+                {"bot_id": bot_id}
+            )
+            if not result.fetchone():
+                api_requests_total.labels(route="/bots/{bot_id}/spec/llm-submit", code=404).inc()
+                raise HTTPException(status_code=404, detail="Bot not found")
+
+        # 2. Валидация и автофикс DSL
+        validator = LLMDSLValidator()
+        validation_result = validator.validate_and_fix(request.raw_dsl)
+
+        if validation_result.success:
+            # 3. Сохраняем исправленную версию
+            async with async_session() as session:
+                # Получаем новую версию
+                result = await session.execute(
+                    text("SELECT MAX(version) as max_version FROM bot_specs WHERE bot_id = :bot_id"),
+                    {"bot_id": bot_id}
+                )
+                new_version = (result.scalar_one_or_none() or 0) + 1
+
+                # Сохраняем новую спецификацию
+                await session.execute(
+                    text("INSERT INTO bot_specs (bot_id, version, spec_json) VALUES (:bot_id, :version, :spec_json)"),
+                    {
+                        "bot_id": bot_id,
+                        "version": new_version,
+                        "spec_json": json.dumps(validation_result.fixed_spec)
+                    }
+                )
+                await session.commit()
+
+                # Очищаем кеш спецификации
+                keys_to_remove = [key for key in router_cache.keys() if key.startswith(str(bot_id))]
+                for key in keys_to_remove:
+                    del router_cache[key]
+
+            api_requests_total.labels(route="/bots/{bot_id}/spec/llm-submit", code=200).inc()
+            return LLMSubmitOut(
+                success=True,
+                bot_id=bot_id,
+                fixes_applied=validation_result.fixes_applied,
+                final_spec=validation_result.fixed_spec,
+                message=f"DSL processed successfully with {len(validation_result.fixes_applied)} fixes applied",
+                version=new_version
+            )
+        else:
+            # 4. Возвращаем ошибки для retry
+            api_requests_total.labels(route="/bots/{bot_id}/spec/llm-submit", code=400).inc()
+            return LLMSubmitOut(
+                success=False,
+                bot_id=bot_id,
+                errors=validation_result.errors,
+                suggestions=validation_result.suggestions,
+                fallback_template=validation_result.fallback_template,
+                message=f"DSL validation failed with {len(validation_result.errors)} errors"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_requests_total.labels(route="/bots/{bot_id}/spec/llm-submit", code=500).inc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 @router.get("/{bot_id}/spec")
